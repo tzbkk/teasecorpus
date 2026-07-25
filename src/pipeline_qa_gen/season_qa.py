@@ -12,14 +12,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # src/
 
 from wiki_parser import load_dump, collect_seasons
 from llm_client import run_pipeline, anti_tautology_block
+from provenance import load_section_map, make_source_extractor, track_chatml, clean_ob, NS0_PATH
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 DUMP_DIR = REPO_ROOT / 'wikidump'
 
-SYSTEM = ('你是《擅长捉弄的高木同学》wiki 知识助手。你只产出能从提供的动画季度资料里'
-          '直接找到答案的 QA 对,严格避免生成你无法回答的问题,'
-          '且所有问题必须自包含(不依赖上下文代词)。')
+SYSTEM = ('你是一个基于给定资料回答问题的助手。'
+          '严格依据提供的字段文本作答,不推测、不编造。'
+          '所有问题自包含,不依赖上下文代词。')
 
 
 def build_user_prompt(item: dict) -> str:
@@ -105,16 +106,29 @@ def main():
     args = parser.parse_args()
 
     if args.reset:
-        out_dir = REPO_ROOT / 'output' / 'wiki_sft' / 'season'
-        for p in [out_dir / 'data.jsonl', out_dir / '.progress.json', out_dir / '.errors.json']:
+        cache_dir = REPO_ROOT / 'output' / '.cache'
+        for p in [cache_dir / 'season.jsonl',
+                  cache_dir / 'season.progress.json',
+                  cache_dir / 'season.errors.json']:
             if p.exists():
                 p.unlink()
         print('>> --reset: cleared season output', flush=True)
 
     print('>> loading dump...', flush=True)
-    contents, _ = load_dump(DUMP_DIR / 'ns0.xml')
-    items = collect_seasons(contents)
+    contents, _, contribs_with_years, _ = load_dump(DUMP_DIR / 'ns0.xml')
+    items = collect_seasons(contents, contributors_by_page=contribs_with_years)
     print(f'   seasons={len(items)}', flush=True)
+
+    try:
+        section_map = load_section_map()
+        source_extractor = make_source_extractor(section_map, NS0_PATH)
+        track_fn = track_chatml
+        clean_ob()
+        print('>> ob provenance: ENABLED', flush=True)
+    except (RuntimeError, ImportError) as e:
+        source_extractor = None
+        track_fn = None
+        print(f'>> ob provenance: DISABLED ({e})', flush=True)
 
     run_pipeline(
         items=items,
@@ -122,12 +136,20 @@ def main():
         build_template_qa=template_qa,
         decontextualize=decontextualize,
         system=SYSTEM,
-        source_label='wikidump/ns0.xml',
         output_subdir='season',
         delay=args.delay,
         max_items=args.max,
         item_id_fn=lambda s: s['title'],
+        source_extractor=source_extractor,
+        track_fn=track_fn,
     )
+
+    if track_fn is not None:
+        try:
+            merged = clean_ob()
+            print(f'>> ob clean: merged {merged} records', flush=True)
+        except Exception as e:
+            print(f'>> warning: ob clean failed: {e}', flush=True)
 
 
 if __name__ == '__main__':
