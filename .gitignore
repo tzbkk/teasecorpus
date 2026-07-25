@@ -1,5 +1,6 @@
 .sisyphus/
 venv/
+.venv/
 output/
 wikidump/
 __pycache__/
