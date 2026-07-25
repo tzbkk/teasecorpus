@@ -13,14 +13,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # src/
 
 from wiki_parser import load_dump, collect_music
 from llm_client import to_chatml, strip_incomplete_jsonl, load_progress, save_progress, load_env
+from provenance import load_section_map, make_source_extractor, track_chatml, clean_ob, NS0_PATH
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 DUMP_DIR = REPO_ROOT / 'wikidump'
-OUTPUT_DIR = REPO_ROOT / 'output' / 'wiki_sft' / 'music'
+CACHE_DIR = REPO_ROOT / 'output' / '.cache'
 
-SYSTEM = ('你是《擅长捉弄的高木同学》wiki 知识助手。'
-          '根据用户问题,基于音乐元数据给出准确答案。')
+SYSTEM = ('你是一个基于给定资料回答问题的助手。'
+          '严格依据提供的字段文本作答,不推测、不编造。'
+          '所有问题自包含,不依赖上下文代词。')
 
 
 def template_qa(item: dict) -> list:
@@ -47,21 +49,32 @@ def main():
     args = parser.parse_args()
 
     if args.reset:
-        for p in [OUTPUT_DIR / 'data.jsonl', OUTPUT_DIR / '.progress.json']:
+        for p in [CACHE_DIR / 'music.jsonl', CACHE_DIR / 'music.progress.json']:
             if p.exists():
                 p.unlink()
         print('>> --reset: cleared music output', flush=True)
 
     print('>> loading dump...', flush=True)
-    contents, _ = load_dump(DUMP_DIR / 'ns0.xml')
-    items = collect_music(contents)
+    contents, _, contribs_with_years, _ = load_dump(DUMP_DIR / 'ns0.xml')
+    items = collect_music(contents, contributors_by_page=contribs_with_years)
     if args.max > 0:
         items = items[:args.max]
     print(f'   music={len(items)}', flush=True)
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    data_path = OUTPUT_DIR / 'data.jsonl'
-    progress_path = OUTPUT_DIR / '.progress.json'
+    try:
+        section_map = load_section_map()
+        source_extractor = make_source_extractor(section_map, NS0_PATH)
+        track_fn = track_chatml
+        clean_ob()
+        print('>> ob provenance: ENABLED', flush=True)
+    except (RuntimeError, ImportError) as e:
+        source_extractor = None
+        track_fn = None
+        print(f'>> ob provenance: DISABLED ({e})', flush=True)
+
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    data_path = CACHE_DIR / 'music.jsonl'
+    progress_path = CACHE_DIR / 'music.progress.json'
 
     valid = strip_incomplete_jsonl(data_path)
     progress = load_progress(progress_path)
@@ -70,17 +83,21 @@ def main():
 
     total = len(items)
     print(f'>> pipeline: {total} items, resuming from idx {last_idx + 1}, '
-          f'{done_qa} QA in data.jsonl', flush=True)
+          f'{done_qa} QA in music.jsonl', flush=True)
 
     with open(data_path, 'a', encoding='utf-8') as fout:
         for idx in range(last_idx + 1, total):
             item = items[idx]
             qa_pairs = template_qa(item)
+            source_hashes = (source_extractor(item) if source_extractor else None)
             for q, a in qa_pairs:
-                meta = {'id': item['title'], 'source': 'wikidump/ns0.xml',
-                        'license': 'CC-BY-SA-3.0'}
-                chatml = to_chatml(SYSTEM, q, a, meta)
+                chatml = to_chatml(SYSTEM, q, a)
                 fout.write(json.dumps(chatml, ensure_ascii=False) + '\n')
+                if track_fn is not None and source_hashes:
+                    try:
+                        track_chatml(chatml, data_path, source_hashes)
+                    except Exception as e:
+                        print(f'  track failed: {e}', flush=True)
             fout.flush()
             done_qa += len(qa_pairs)
             save_progress(progress_path, {
@@ -91,6 +108,13 @@ def main():
                   f'(total {done_qa})', flush=True)
 
     print(f'\n>> done: {done_qa} QA in {data_path}', flush=True)
+
+    if track_fn is not None:
+        try:
+            merged = clean_ob()
+            print(f'>> ob clean: merged {merged} records', flush=True)
+        except Exception as e:
+            print(f'>> warning: ob clean failed: {e}', flush=True)
 
 
 if __name__ == '__main__':
