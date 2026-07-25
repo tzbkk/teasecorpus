@@ -53,6 +53,8 @@ wikidump/ns0.deleted.20250101-120000.txt     # 删除/移动清单(有事件时)
 + 22 unclassified (画廊/沙盒) = 408 页
 
 Contributors: 23 (21 users + 2 IPs)
-铁桶: 3886 revisions (2018-2026)
-Lunisha Kumina: 1153 revisions (2024-2026)
+铁桶: 2018-2026 (跨所有 page)
+Lunisha Kumina: 2024-2026
 ```
+
+注: `setup_ob.py` 会从 dump 中提取这些 contributor 统计来注册 ob sections。每个 contributor 的 year_range 由其在该 page 的所有 revision timestamps 计算得出。
