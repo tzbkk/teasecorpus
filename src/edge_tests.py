@@ -146,7 +146,7 @@ def write_section(md, type_name, rows):
 
 def main():
     print('>> loading dump...', flush=True)
-    contents, redirect_map = load_dump(DUMP_DIR / 'ns0.xml')
+    contents, redirect_map, _, _ = load_dump(DUMP_DIR / 'ns0.xml')
     resolve_name = make_resolver(redirect_map)
 
     chapters = collect_chapters(contents)

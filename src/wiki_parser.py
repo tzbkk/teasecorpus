@@ -325,9 +325,50 @@ def _normalize(raw: dict, aliases: dict) -> dict:
     return out
 
 
+def _extract_revisions_metadata(page_elem):
+    """Extract contributors + timestamps + IDs from a <page> Element.
+
+    Iterates over ALL <revision> children (not just latest) so the full
+    contributor set + their revision timestamps are captured.
+
+    Returns (contribs_with_years, contrib_ids) where:
+        contribs_with_years: {contributor_name: [timestamp, ...]}
+        contrib_ids: {contributor_name: wiki_id or IP}
+    """
+    contribs_with_years: dict = {}
+    contrib_ids: dict = {}
+    for rev in page_elem.findall(NS + 'revision'):
+        timestamp = rev.findtext(NS + 'timestamp') or ''
+        contrib_elem = rev.find(NS + 'contributor')
+        if contrib_elem is None:
+            continue
+        username = contrib_elem.findtext(NS + 'username')
+        ip = contrib_elem.findtext(NS + 'ip')
+        wiki_id = contrib_elem.findtext(NS + 'id')
+        name = username or ip
+        if not name:
+            continue
+        contribs_with_years.setdefault(name, []).append(timestamp)
+        # Prefer <id> when present; for IP contributors the IP itself is the
+        # stable identifier (and equals `name` in that case).
+        if wiki_id:
+            contrib_ids[name] = wiki_id
+        elif ip:
+            contrib_ids[name] = ip
+    return contribs_with_years, contrib_ids
+
+
 def load_dump(dump_path: Path):
-    """Returns (contents, redirects): list of (title, text) and {src: target}."""
+    """Returns (contents, redirect_map, contributors_with_years_by_page, contributor_ids).
+
+    - contents: list of (title, text) tuples for non-redirect pages
+    - redirect_map: {src_title: target_title}
+    - contributors_with_years_by_page: {title: {contributor_name: [timestamp, ...]}}
+    - contributor_ids: {contributor_name: wiki_id or IP string}
+    """
     pages_raw = []
+    contributors_with_years_by_page: dict = {}
+    contributor_ids: dict = {}
     for event, elem in ET.iterparse(str(dump_path), events=('end',)):
         if elem.tag != NS + 'page':
             continue
@@ -337,6 +378,10 @@ def load_dump(dump_path: Path):
             rev = max(revs, key=lambda r: int(r.findtext(NS + 'id') or 0))
             text = rev.findtext(NS + 'text') or ''
             pages_raw.append((title, text))
+            page_contribs, page_ids = _extract_revisions_metadata(elem)
+            if page_contribs:
+                contributors_with_years_by_page[title] = page_contribs
+            contributor_ids.update(page_ids)
         elem.clear()
 
     redirect_map = {}
@@ -347,7 +392,39 @@ def load_dump(dump_path: Path):
 
     contents = [(t, tx) for t, tx in pages_raw
                 if not re.match(r'\s*#REDIRECT', tx, re.IGNORECASE)]
-    return contents, redirect_map
+    return contents, redirect_map, contributors_with_years_by_page, contributor_ids
+
+
+def load_cherry_pick_page(dump_path: Path, page_title: str):
+    """Extract one page's text + contributor metadata from a MediaWiki dump.
+
+    Stops iteration as soon as ``page_title`` is matched. Useful for pulling a
+    single page (e.g. 译名表) out of a large dump without parsing it all.
+
+    Returns (text, contribs_with_years, contrib_ids):
+        text: latest revision's wikitext of the matched page
+        contribs_with_years: {contributor_name: [timestamp, ...]}
+        contrib_ids: {contributor_name: wiki_id or IP string}
+
+    Raises KeyError if the page is not present in the dump.
+    """
+    for event, elem in ET.iterparse(str(dump_path), events=('end',)):
+        if elem.tag != NS + 'page':
+            continue
+        title = elem.findtext(NS + 'title') or ''
+        if title != page_title:
+            elem.clear()
+            continue
+        revs = elem.findall(NS + 'revision')
+        if not revs:
+            elem.clear()
+            raise KeyError(f'page not found in {dump_path}: {page_title}')
+        rev = max(revs, key=lambda r: int(r.findtext(NS + 'id') or 0))
+        text = rev.findtext(NS + 'text') or ''
+        contribs_with_years, contrib_ids = _extract_revisions_metadata(elem)
+        elem.clear()
+        return text, contribs_with_years, contrib_ids
+    raise KeyError(f'page not found in {dump_path}: {page_title}')
 
 
 def make_resolver(redirect_map: dict):
@@ -360,7 +437,7 @@ def make_resolver(redirect_map: dict):
     return resolve
 
 
-def collect_chapters(contents):
+def collect_chapters(contents, contributors_by_page=None):
     out = []
     for title, text in contents:
         if not re.match(r'^.+?第[\d.]+章$', title):
@@ -372,7 +449,7 @@ def collect_chapters(contents):
         location = strip_markup(get_section(text, '地点') or get_section(text, '位置'))
         trivia = strip_markup(get_section(text, '琐事'))
         quote = parse_quote(text)
-        out.append({
+        item = {
             'title': title,
             'infobox': ib,
             'summary': summary,
@@ -380,12 +457,15 @@ def collect_chapters(contents):
             'location': location,
             'trivia': trivia,
             'quote': quote,
-        })
+        }
+        if contributors_by_page is not None:
+            item['contributors'] = set(contributors_by_page.get(title, {}).keys())
+        out.append(item)
     out.sort(key=lambda c: c['title'])
     return out
 
 
-def collect_characters(contents):
+def collect_characters(contents, contributors_by_page=None):
     """Returns {title: {fields, intro, appearance, personality, relations, trivia}}."""
     out = {}
     for title, text in contents:
@@ -400,7 +480,7 @@ def collect_characters(contents):
         rel_section = get_section(text, '关系')
         relations = [{'name': n, 'desc': strip_markup(b)}
                      for n, b in get_subsections(rel_section)]
-        out[title] = {
+        item = {
             'fields': fields,
             'intro': _intro_after_infobox(text),
             'appearance': strip_markup(get_section(text, '外貌')),
@@ -408,10 +488,13 @@ def collect_characters(contents):
             'relations': relations,
             'trivia': strip_markup(get_section(text, '琐事')),
         }
+        if contributors_by_page is not None:
+            item['contributors'] = set(contributors_by_page.get(title, {}).keys())
+        out[title] = item
     return out
 
 
-def collect_episodes(contents):
+def collect_episodes(contents, contributors_by_page=None):
     out = []
     for title, text in contents:
         raw = parse_infobox(text, '剧集信息')
@@ -421,67 +504,79 @@ def collect_episodes(contents):
         chars = parse_chars_list(get_section(text, '出场角色'))
         segments = [{'name': n, 'desc': strip_markup(b)}
                     for n, b in get_subsections(get_section(text, '片段'))]
-        out.append({
+        item = {
             'title': title,
             'fields': fields,
             'characters': chars,
             'segments': segments,
             'intro': _intro_after_infobox(text),
-        })
+        }
+        if contributors_by_page is not None:
+            item['contributors'] = set(contributors_by_page.get(title, {}).keys())
+        out.append(item)
     out.sort(key=lambda e: e['title'])
     return out
 
 
-def collect_music(contents):
+def collect_music(contents, contributors_by_page=None):
     out = []
     for title, text in contents:
         raw = parse_infobox(text, '音乐信息')
         if not raw:
             continue
         fields = normalize_music_fields(raw)
-        out.append({
+        item = {
             'title': title,
             'fields': fields,
             'intro': _intro_after_infobox(text),
-        })
+        }
+        if contributors_by_page is not None:
+            item['contributors'] = set(contributors_by_page.get(title, {}).keys())
+        out.append(item)
     out.sort(key=lambda m: m['title'])
     return out
 
 
-def collect_volumes(contents):
+def collect_volumes(contents, contributors_by_page=None):
     out = []
     for title, text in contents:
         raw = parse_infobox(text, '卷资料')
         if not raw:
             continue
         fields = normalize_volume_fields(raw)
-        out.append({
+        item = {
             'title': title,
             'fields': fields,
             'chapters': parse_chars_list(get_section(text, '章节')),
             'intro': _intro_after_infobox(text),
-        })
+        }
+        if contributors_by_page is not None:
+            item['contributors'] = set(contributors_by_page.get(title, {}).keys())
+        out.append(item)
     out.sort(key=lambda v: v['title'])
     return out
 
 
-def collect_seasons(contents):
+def collect_seasons(contents, contributors_by_page=None):
     out = []
     for title, text in contents:
         raw = parse_infobox(text, '动画资料')
         if not raw:
             continue
         fields = normalize_season_fields(raw)
-        out.append({
+        item = {
             'title': title,
             'fields': fields,
             'synopsis': strip_markup(get_section(text, '内容简介') or get_section(text, '简介')),
-        })
+        }
+        if contributors_by_page is not None:
+            item['contributors'] = set(contributors_by_page.get(title, {}).keys())
+        out.append(item)
     out.sort(key=lambda s: s['title'])
     return out
 
 
-def collect_movies(contents):
+def collect_movies(contents, contributors_by_page=None):
     out = []
     for title, text in contents:
         raw = parse_infobox_any(text, ('Infobox Movie', r'Infobox\s+film'))
@@ -506,11 +601,14 @@ def collect_movies(contents):
             if line.startswith('*'):
                 release_dates.append(line.lstrip('* ').strip())
 
-        out.append({
+        item = {
             'title': title,
             'fields': fields,
             'intro': _intro_after_infobox(text),
             'synopsis': synopsis,
             'release_dates': release_dates,
-        })
+        }
+        if contributors_by_page is not None:
+            item['contributors'] = set(contributors_by_page.get(title, {}).keys())
+        out.append(item)
     return out
