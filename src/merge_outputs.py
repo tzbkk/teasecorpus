@@ -1,27 +1,25 @@
-"""Merge all per-type data.jsonl files into a single training dataset.
+"""Merge per-type cache files into the canonical dataset.jsonl.
 
-Reads from output/wiki_sft/{chapter,character,episode,music,volume,season,movie}/data.jsonl,
-tags each entry with meta.type, and writes output/wiki_sft/all_data.jsonl.
-Also prints per-type counts.
+Reads output/.cache/{type}.jsonl, concatenates byte-for-byte (meta.type
+already set at pipeline time, so line_hash is stable from pipeline ->
+final), writes to repository-root dataset.jsonl (sibling of .ob/).
 """
 import json
-import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SFT_DIR = REPO_ROOT / 'output' / 'wiki_sft'
+CACHE_DIR = REPO_ROOT / 'output' / '.cache'
+DATASET_PATH = REPO_ROOT / 'output' / 'dataset.jsonl'
 
 TYPES = ['chapter', 'character', 'episode', 'music', 'volume', 'season', 'movie']
 
 
 def main():
-    out_path = SFT_DIR / 'all_data.jsonl'
     total = 0
     counts = {}
-
-    with open(out_path, 'w', encoding='utf-8') as fout:
+    with open(DATASET_PATH, 'w', encoding='utf-8') as fout:
         for typ in TYPES:
-            in_path = SFT_DIR / typ / 'data.jsonl'
+            in_path = CACHE_DIR / f'{typ}.jsonl'
             if not in_path.exists():
                 counts[typ] = 0
                 continue
@@ -32,16 +30,15 @@ def main():
                     if not line:
                         continue
                     try:
-                        d = json.loads(line)
+                        json.loads(line)  # validate only, don't modify
                     except json.JSONDecodeError:
                         continue
-                    d.setdefault('meta', {})['type'] = typ
-                    fout.write(json.dumps(d, ensure_ascii=False) + '\n')
+                    fout.write(line + '\n')
                     n += 1
             counts[typ] = n
             total += n
 
-    print(f'>> merged: {total} QA -> {out_path}', flush=True)
+    print(f'>> merged: {total} QA -> {DATASET_PATH}', flush=True)
     print('   per-type:', flush=True)
     for typ in TYPES:
         if counts.get(typ, 0) > 0:

@@ -11,7 +11,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ENV_PATH = REPO_ROOT / '.env'
-OUTPUT_DIR = REPO_ROOT / 'output' / 'wiki_sft'
+CACHE_DIR = REPO_ROOT / 'output' / '.cache'
 
 
 def load_env() -> dict:
@@ -133,14 +133,13 @@ def anti_tautology_block(entity_label: str) -> str:
 """
 
 
-def to_chatml(system: str, q: str, a: str, meta: dict) -> dict:
+def to_chatml(system: str, q: str, a: str) -> dict:
     return {
         'messages': [
             {'role': 'system', 'content': system},
             {'role': 'user', 'content': q},
             {'role': 'assistant', 'content': a},
         ],
-        'meta': meta,
     }
 
 
@@ -178,8 +177,9 @@ def strip_incomplete_jsonl(path: Path) -> int:
 
 
 def run_pipeline(items, build_prompt, build_template_qa, decontextualize,
-                 system: str, source_label: str, output_subdir: str,
-                 delay: float, max_items: int, item_id_fn):
+                 system: str, output_subdir: str,
+                 delay: float, max_items: int, item_id_fn,
+                 source_extractor=None, track_fn=None):
     """Generic pipeline runner.
 
     Args:
@@ -189,20 +189,35 @@ def run_pipeline(items, build_prompt, build_template_qa, decontextualize,
         decontextualize(text, item) -> str: post-process LLM output.
         system: system prompt.
         source_label: meta.source value (e.g. 'wikidump/ns0.xml').
-        output_subdir: name under output/wiki_sft/ (e.g. 'chapter').
+        output_subdir: file stem under output/.cache/ (e.g. 'chapter' -> chapter.jsonl).
         delay: seconds between LLM calls.
         max_items: 0 = all.
         item_id_fn(item) -> str: human-readable id for logs/meta.
+        meta_type: meta.type value stamped on every chatml row at production
+            time (e.g. 'chapter'). Must match the cache file stem and the
+            TYPES list in merge_outputs.py so line_hash stays stable from
+            pipeline -> final dataset.jsonl.
+        source_extractor: optional callable
+            `(item, qa_pair=None) -> list[str] | None` returning a list of
+            section hashes the resulting ChatML row was derived from. Called
+            PER QA pair (so extractors can vary source per question, e.g.
+            chapter_qa's translation-table-aware extractor). When None or
+            omitted, provenance tracking is disabled for this pipeline.
+        track_fn: optional callable
+            `(chatml, file_path, section_hashes) -> None` that calls
+            `ob.track(...)` to record provenance. Only invoked when both
+            `track_fn` and `source_extractor` are provided AND the extractor
+            returned a non-empty list. Track exceptions are logged to err_log
+            and never abort the pipeline.
     """
     env = load_env()
     require_env(env, 'LLM_BASE_URL', 'LLM_MODEL', 'LLM_API_KEY')
     print(f'>> LLM = {env["LLM_MODEL"]} @ {env["LLM_BASE_URL"]}', flush=True)
 
-    out_dir = OUTPUT_DIR / output_subdir
-    out_dir.mkdir(parents=True, exist_ok=True)
-    data_path = out_dir / 'data.jsonl'
-    progress_path = out_dir / '.progress.json'
-    err_path = out_dir / '.errors.json'
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    data_path = CACHE_DIR / f'{output_subdir}.jsonl'
+    progress_path = CACHE_DIR / f'{output_subdir}.progress.json'
+    err_path = CACHE_DIR / f'{output_subdir}.errors.json'
 
     valid_lines = strip_incomplete_jsonl(data_path)
     progress = load_progress(progress_path)
@@ -245,9 +260,17 @@ def run_pipeline(items, build_prompt, build_template_qa, decontextualize,
             dropped = pre - len(qa_pairs)
 
             for q, a in qa_pairs:
-                meta = {'id': item_id, 'source': source_label, 'license': 'CC-BY-SA-3.0'}
-                chatml = to_chatml(system, q, a, meta)
+                chatml = to_chatml(system, q, a)
                 f_out.write(json.dumps(chatml, ensure_ascii=False) + '\n')
+
+                if source_extractor is not None and track_fn is not None:
+                    source_hashes = source_extractor(item, (q, a))
+                    if source_hashes:
+                        try:
+                            track_fn(chatml, data_path, source_hashes)
+                        except Exception as e:
+                            err_log.append({'idx': idx, 'id': item_id,
+                                            'track_error': str(e)[:200]})
             f_out.flush()
             os.fsync(f_out.fileno())
 
