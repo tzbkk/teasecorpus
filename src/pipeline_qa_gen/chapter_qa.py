@@ -13,16 +13,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # src/
 
 from wiki_parser import (
     load_dump, make_resolver, collect_chapters, collect_characters,
+    load_cherry_pick_page, strip_markup,
 )
 from llm_client import run_pipeline, anti_tautology_block
+from provenance import (
+    load_section_map, track_chatml, clean_ob,
+    NS0_PATH, TRANSLATION_TABLE_PATH,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 DUMP_DIR = REPO_ROOT / 'wikidump'
 
-SYSTEM = ('你是《擅长捉弄的高木同学》wiki 知识助手。你只产出能从提供的字段文本里'
-          '直接找到答案的 QA 对,严格避免生成你无法回答的问题,'
-          '且所有问题必须自包含(不依赖上下文代词)。')
+SYSTEM = ('你是一个基于给定资料回答问题的助手。'
+          '严格依据提供的字段文本作答,不推测、不编造。'
+          '所有问题自包含,不依赖上下文代词。')
 
 
 def build_user_prompt(ch: dict, resolve_name, character_pages) -> str:
@@ -197,6 +202,61 @@ def decontextualize_qa(text: str, ch: dict) -> str:
     return out
 
 
+def parse_translation_table(dump_path: Path) -> dict:
+    """Parse 漫画标题译名表 wikitable -> {chapter_id_str: {'jp':..., 'zh':..., 'en':...}}.
+
+    The table columns are:
+        话数 | 日文原名 | 繁中(尖端出版) | 简中(Bilibili漫画) | 简中(长春出版社)
+    No English column exists in the source; 'en' is always ''.
+
+    zh field prefers 简中/Bilibili, falls back to 简中/长春出版社, then 繁中/尖端.
+
+    Returns {} on any error (so the pipeline degrades gracefully without
+    translation augmentation).
+    """
+    try:
+        text, _contribs, _ids = load_cherry_pick_page(
+            dump_path,
+            page_title='擅长捉弄的高木同学wiki:漫画标题译名表',
+        )
+    except Exception as e:
+        print(f'>> 警告: 译名表解析失败 ({type(e).__name__}: {e})', flush=True)
+        return {}
+
+    table: dict[str, dict[str, str]] = {}
+    # Each row in the wikitable is separated by '\n|-'. A chapter row's
+    # first cell is '! 第N话'. Header/volume rows start with '! colspan='
+    # or '! 尖端出版' etc., which won't match the chapter regex below.
+    for chunk in re.split(r'\n\|-', text):
+        m = re.search(r'!\s*第\s*([0-9]+)\s*话', chunk)
+        if not m:
+            continue
+        chap_id = m.group(1)
+
+        # Data cells are lines starting with '| ' (the '! 第N话' line is
+        # a header cell, excluded by the regex).
+        cells: list[str] = []
+        for cl in re.findall(r'^\|(.*)$', chunk, re.MULTILINE):
+            cm = re.match(r'\s*colspan="(\d+)"\s*\|\s*(.*)', cl, re.DOTALL)
+            if cm:
+                cells.extend([cm.group(2).strip()] * int(cm.group(1)))
+            else:
+                cells.append(cl.strip())
+
+        # cells[0] is the {{Lj|...}} jp cell; cells[1..3] are zh variants.
+        zh_trad = strip_markup(cells[1]) if len(cells) > 1 else ''
+        zh_bili = strip_markup(cells[2]) if len(cells) > 2 else ''
+        zh_ccbs = strip_markup(cells[3]) if len(cells) > 3 else ''
+        zh = zh_bili or zh_ccbs or zh_trad
+
+        jp_m = re.search(r'\{\{Lj\|([^}]+)\}\}', chunk)
+        jp = strip_markup(jp_m.group(1)) if jp_m else ''
+
+        if jp or zh:
+            table[chap_id] = {'jp': jp, 'zh': zh, 'en': ''}
+    return table
+
+
 def main():
     parser = argparse.ArgumentParser(description='Chapter QA pipeline (247 pages).')
     parser.add_argument('--max-chapters', type=int, default=0,
@@ -208,23 +268,70 @@ def main():
     args = parser.parse_args()
 
     if args.reset:
-        out_dir = REPO_ROOT / 'output' / 'wiki_sft' / 'chapter'
-        for p in [out_dir / 'data.jsonl', out_dir / '.progress.json', out_dir / '.errors.json']:
+        cache_dir = REPO_ROOT / 'output' / '.cache'
+        for p in [cache_dir / 'chapter.jsonl',
+                  cache_dir / 'chapter.progress.json',
+                  cache_dir / 'chapter.errors.json']:
             if p.exists():
                 p.unlink()
         print('>> --reset: cleared chapter output and progress', flush=True)
 
     print('>> loading dump...', flush=True)
-    contents, redirect_map = load_dump(DUMP_DIR / 'ns0.xml')
-    chapter_pages = collect_chapters(contents)
+    contents, redirect_map, contribs_with_years, _ = load_dump(DUMP_DIR / 'ns0.xml')
+    chapter_pages = collect_chapters(contents, contributors_by_page=contribs_with_years)
     character_pages = collect_characters(contents)
     resolve_name = make_resolver(redirect_map)
     print(f'   chapters={len(chapter_pages)} characters={len(character_pages)}', flush=True)
 
+    translation_table = parse_translation_table(
+        DUMP_DIR / '擅长捉弄的高木同学wiki.xml')
+    print(f'>> 译名表 loaded: {len(translation_table)} 章', flush=True)
+
     def build_prompt(ch):
         if not ch['summary']:
             return None
-        return build_user_prompt(ch, resolve_name, character_pages)
+        prompt = build_user_prompt(ch, resolve_name, character_pages)
+        chap_id = ch.get('infobox', {}).get('章节数目', '')
+        if chap_id and chap_id in translation_table:
+            t = translation_table[chap_id]
+            lines = [f'- 日文原名: {t["jp"]}', f'- 中文译名: {t["zh"]}']
+            if t.get('en'):
+                lines.append(f'- 英文译名: {t["en"]}')
+            prompt += (
+                "\n\n【章节标题译名信息】(来自漫画标题译名表,作者:铁桶)\n"
+                + "\n".join(lines) + "\n"
+                + f"\n可基于此生成「第 {chap_id} 章的日文原名是什么?」"
+                f"或「『{t['jp']}』是哪一章的日文原名?」这类 QA。"
+            )
+        return prompt
+
+    source_extractor = None
+    track_fn = None
+    try:
+        section_map = load_section_map()
+        clean_ob()
+
+        def _extract(item, qa_pair=None):
+            contributors = item.get('contributors', set())
+            hashes = [
+                section_map[(NS0_PATH, c)]
+                for c in contributors
+                if (NS0_PATH, c) in section_map
+            ]
+            chap_id = item.get('infobox', {}).get('章节数目', '')
+            if chap_id and chap_id in translation_table:
+                for (src, _contributor), h in section_map.items():
+                    if src == TRANSLATION_TABLE_PATH:
+                        hashes.append(h)
+            return hashes
+
+        source_extractor = _extract
+        track_fn = track_chatml
+        print('>> ob provenance: ENABLED (chapter + 译名表)', flush=True)
+    except (RuntimeError, ImportError) as e:
+        source_extractor = None
+        track_fn = None
+        print(f'>> ob provenance: DISABLED ({type(e).__name__}: {e})', flush=True)
 
     run_pipeline(
         items=chapter_pages,
@@ -232,12 +339,20 @@ def main():
         build_template_qa=template_qa_for_no_summary,
         decontextualize=decontextualize_qa,
         system=SYSTEM,
-        source_label='wikidump/ns0.xml',
         output_subdir='chapter',
         delay=args.delay,
         max_items=args.max_chapters,
         item_id_fn=lambda ch: ch['title'],
+        source_extractor=source_extractor,
+        track_fn=track_fn,
     )
+
+    if track_fn is not None:
+        try:
+            merged = clean_ob()
+            print(f'>> ob clean: merged {merged} records', flush=True)
+        except Exception as e:
+            print(f'>> warning: ob clean failed: {e}', flush=True)
 
 
 if __name__ == '__main__':
