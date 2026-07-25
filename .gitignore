@@ -1,0 +1,7 @@
+.sisyphus/
+venv/
+output/
+wikidump/
+__pycache__/
+*.pyc
+.env
