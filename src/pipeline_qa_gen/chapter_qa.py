@@ -18,7 +18,7 @@ from wiki_parser import (
 from llm_client import run_pipeline, anti_tautology_block
 from provenance import (
     load_section_map, track_chatml, clean_ob,
-    NS0_PATH, TRANSLATION_TABLE_PATH,
+    make_chapter_source_extractor,
 )
 
 
@@ -310,22 +310,7 @@ def main():
     try:
         section_map = load_section_map()
         clean_ob()
-
-        def _extract(item, qa_pair=None):
-            contributors = item.get('contributors', set())
-            hashes = [
-                section_map[(NS0_PATH, c)]
-                for c in contributors
-                if (NS0_PATH, c) in section_map
-            ]
-            chap_id = item.get('infobox', {}).get('章节数目', '')
-            if chap_id and chap_id in translation_table:
-                for (src, _contributor), h in section_map.items():
-                    if src == TRANSLATION_TABLE_PATH:
-                        hashes.append(h)
-            return hashes
-
-        source_extractor = _extract
+        source_extractor = make_chapter_source_extractor(section_map, translation_table)
         track_fn = track_chatml
         print('>> ob provenance: ENABLED (chapter + 译名表)', flush=True)
     except (RuntimeError, ImportError) as e:
