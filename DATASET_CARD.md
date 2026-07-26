@@ -25,6 +25,7 @@ A Chinese ChatML SFT dataset generated from the [「擅长捉弄的高木同学�
 
 - **Homepage:** https://karakai-jouzu-no-takagi-san.fandom.com/zh/
 - **Repository:** https://github.com/tzbkk/teasecorpus
+- **Space:** https://huggingface.co/spaces/tzbkk/teasecorpus-ob (provenance explorer)
 - **Point of Contact:** Haolin Xue \<tzbkk@outlook.com\>
 - **License:** CC-BY-SA-3.0 (inherited from Fandom wiki)
 
