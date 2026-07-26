@@ -2,6 +2,8 @@
 
 从「[擅长捉弄的高木同学](https://karakai-jouzu-no-takagi-san.fandom.com/zh/)」Fandom wiki 生成带 contributor 溯源的 ChatML SFT 数据集。
 
+数据集：[https://huggingface.co/datasets/tzbkk/teasecorpus](https://huggingface.co/datasets/tzbkk/teasecorpus)
+
 ## 依赖
 
 本仓库依赖两个 sibling 仓库,需先克隆到同级目录:
