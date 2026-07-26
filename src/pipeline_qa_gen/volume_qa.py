@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # src/
 
 from wiki_parser import load_dump, collect_volumes
 from llm_client import to_chatml, strip_incomplete_jsonl, load_progress, save_progress
-from provenance import load_section_map, make_source_extractor, track_chatml, clean_ob, NS0_PATH
+from provenance import load_section_map, make_source_extractor, track_chatml, clean_ob
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -86,7 +86,7 @@ def main():
 
     try:
         section_map = load_section_map()
-        source_extractor = make_source_extractor(section_map, NS0_PATH)
+        source_extractor = make_source_extractor(section_map)
         track_fn = track_chatml
         clean_ob()
         print('>> ob provenance: ENABLED', flush=True)
