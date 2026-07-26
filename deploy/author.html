@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Author Lookup — teasecorpus provenance explorer</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<h1>teasecorpus provenance explorer</h1>
+<nav class="nav">
+  <a href="browse.html">Browse</a>
+  <a href="author.html" class="active">Author Lookup</a>
+  <a href="about.html">About</a>
+</nav>
+
+<div class="card">
+  <h2>Contributors</h2>
+  <p style="color:var(--muted);font-size:.875rem;margin-bottom:.75rem">Click a contributor to see all QA records derived from their wiki edits.</p>
+  <div id="author-table-loading" class="loading">Loading authors...</div>
+  <table class="hidden" id="author-table">
+    <thead><tr><th>Name</th><th style="width:20%">Wiki Pages</th></tr></thead>
+    <tbody id="author-tbody"></tbody>
+  </table>
+</div>
+
+<div class="card" id="search-card">
+  <div class="row">
+    <label>Author name:</label>
+    <input type="text" id="authorName" placeholder="e.g., 铁桶" style="width:12rem">
+    <button id="searchBtn">Search</button>
+  </div>
+  <div id="author-status" class="loading hidden"></div>
+  <div id="author-results" class="hidden">
+    <table>
+      <thead><tr><th style="width:6%">Line</th><th style="width:10%">Type</th><th style="width:42%">Question</th><th style="width:42%">Answer</th></tr></thead>
+      <tbody id="results-tbody"></tbody>
+    </table>
+  </div>
+</div>
+
+<div id="author-detail" class="detail-panel hidden"></div>
+
+<script src="ob-reader.js"></script>
+<script src="app.js"></script>
+<script>
+document.getElementById('searchBtn').addEventListener('click', search);
+document.getElementById('authorName').addEventListener('keydown', e => { if (e.key === 'Enter') search(); });
+
+async function init() {
+  try {
+    await App.reader.init();
+    await App.ready();
+    buildAuthorTable();
+  } catch (e) {
+    document.getElementById('author-table-loading').textContent = 'Failed to load: ' + e.message;
+  }
+}
+
+function buildAuthorTable() {
+  const tbody = document.getElementById('author-tbody');
+  const rows = [];
+  for (const [id, author] of App.reader.authors) {
+    const sectionCount = (App.reader.authorSections.get(id) || new Set()).size;
+    rows.push({ name: author.name, count: sectionCount });
+  }
+  rows.sort((a, b) => a.name.localeCompare(b.name, 'zh'));
+
+  tbody.innerHTML = rows.map(r =>
+    `<tr style="cursor:pointer" data-name="${r.name}">
+      <td>${App.escapeHtml(r.name)}</td>
+      <td>${r.count}</td>
+    </tr>`
+  ).join('');
+
+  document.getElementById('author-table-loading').classList.add('hidden');
+  document.getElementById('author-table').classList.remove('hidden');
+
+  document.querySelectorAll('#author-tbody tr').forEach(tr => {
+    tr.addEventListener('click', () => selectAuthor(tr.dataset.name));
+  });
+}
+
+function selectAuthor(name) {
+  document.getElementById('authorName').value = name;
+  search();
+}
+
+async function search() {
+  const name = document.getElementById('authorName').value.trim();
+  if (!name) return;
+
+  const status = document.getElementById('author-status');
+  const results = document.getElementById('author-results');
+  const tbody = document.getElementById('results-tbody');
+  const detail = document.getElementById('author-detail');
+
+  status.className = 'loading'; status.textContent = 'Scanning...';
+  results.classList.add('hidden'); detail.classList.add('hidden');
+
+  try {
+    await App.ready();
+    status.textContent = 'Building hash index...';
+    await App.ensureHashIndex();
+
+    status.textContent = 'Scanning .ob/ shards...';
+    const entries = await App.reader.showByAuthor(name);
+
+    if (!entries.length) {
+      status.className = '';
+      status.textContent = `No records found for "${name}"`;
+      return;
+    }
+
+    status.classList.add('hidden');
+
+    const lines = entries.map(e => {
+      const n = App.hashToLine.get(e.lineHash) || 0;
+      return { lineNo: n };
+    }).filter(l => l.lineNo > 0).sort((a, b) => a.lineNo - b.lineNo);
+
+    tbody.innerHTML = lines.map(l => {
+      const r = App.parsed[l.lineNo - 1];
+      const q = (r.messages[1]?.content || '').substring(0, 100);
+      const a = (r.messages[2]?.content || '').substring(0, 100);
+      return `<tr style="cursor:pointer" data-line="${l.lineNo}" class="result-row">
+        <td>${l.lineNo}</td>
+        <td style="font-size:.75rem;color:var(--muted)">${App.detectType(l.lineNo)}</td>
+        <td>${App.escapeHtml(q)}${q.length>=100?'...':''}</td>
+        <td>${App.escapeHtml(a)}${a.length>=100?'...':''}</td>
+      </tr>`;
+    }).join('');
+
+    results.classList.remove('hidden');
+
+    document.querySelectorAll('.result-row').forEach(tr => {
+      tr.addEventListener('click', () => showResultDetail(parseInt(tr.dataset.line)));
+    });
+
+    document.getElementById('search-card').scrollIntoView({ behavior: 'smooth' });
+  } catch (e) {
+    status.className = 'error';
+    status.textContent = `Error: ${e.message}`;
+  }
+}
+
+async function showResultDetail(lineNo) {
+  document.querySelectorAll('.result-row').forEach(tr => tr.classList.remove('selected'));
+  const tr = document.querySelector(`.result-row[data-line="${lineNo}"]`);
+  if (tr) tr.classList.add('selected');
+
+  const detail = document.getElementById('author-detail');
+  detail.classList.remove('hidden');
+  detail.innerHTML = '<span class="loading">Loading provenance...</span>';
+
+  const record = App.parsed[lineNo - 1];
+  const msgs = record.messages || [];
+  let qa = '';
+  for (const m of msgs) {
+    qa += `<strong>${m.role.toUpperCase()}</strong>: ${App.escapeHtml(m.content)}<br><br>`;
+  }
+
+  let provHtml = '';
+  try {
+    const result = await App.reader.blame(App.dataset[lineNo - 1]);
+    if (result?.sources?.length) {
+      provHtml = '<hr style="margin:.5rem 0;border-color:var(--border)">';
+      for (const s of result.sources) {
+        const authors = s.authors.map(a => `<a class="author-tag" href="author.html?q=${encodeURIComponent(a.name)}">${App.escapeHtml(a.name)}</a>`).join(' ');
+        provHtml += `<div style="margin-bottom:.5rem;font-size:.8125rem">
+          <strong>${App.escapeHtml(s.path)}</strong> <span class="hash">${s.hash.substring(0,16)}...</span><br>
+          ${authors} &middot; ${App.escapeHtml(s.license)} (${s.year})
+        </div>`;
+      }
+    } else {
+      provHtml = '<hr style="margin:.5rem 0"><em>No provenance data</em>';
+    }
+  } catch (e) {
+    provHtml = `<hr style="margin:.5rem 0"><em>Error: ${App.escapeHtml(e.message)}</em>`;
+  }
+  detail.innerHTML = `<div class="qa-block">${qa}${provHtml}</div>`;
+  detail.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+(async () => {
+  const urlQ = new URLSearchParams(location.search).get('q');
+  if (urlQ) document.getElementById('authorName').value = urlQ;
+  await init();
+  if (urlQ) search();
+})();
+</script>
+</body>
+</html>

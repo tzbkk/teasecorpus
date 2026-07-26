@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Browse — teasecorpus provenance explorer</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<h1>teasecorpus provenance explorer</h1>
+<nav class="nav">
+  <a href="browse.html" class="active">Browse</a>
+  <a href="author.html">Author Lookup</a>
+  <a href="about.html">About</a>
+</nav>
+
+<div class="card">
+  <div class="row">
+    <label>Type:</label>
+    <select id="qaType">
+      <option value="all">All (1410)</option>
+      <option value="chapter">Chapter (896)</option>
+      <option value="episode">Episode (180)</option>
+      <option value="music">Music (123)</option>
+      <option value="volume">Volume (115)</option>
+      <option value="character">Character (70)</option>
+      <option value="season">Season (16)</option>
+      <option value="movie">Movie (10)</option>
+    </select>
+    <label>Search:</label>
+    <input type="text" id="qaSearch" placeholder="Filter by question/answer..." style="width:14rem">
+    <label>Line:</label>
+    <input type="number" id="lineJump" placeholder="1–1410" min="1" max="1410" style="width:5rem">
+    <button onclick="jumpLine()">Go</button>
+  </div>
+  <div class="pagination" id="pager"></div>
+  <div class="browse-table">
+    <table>
+      <thead><tr><th style="width:5%">#</th><th style="width:40%">Question</th><th style="width:40%">Answer</th><th style="width:15%">Type</th></tr></thead>
+      <tbody id="browse-tbody"><tr><td colspan="4" class="loading">Loading dataset...</td></tr></tbody>
+    </table>
+  </div>
+  <div class="pagination" id="pager2"></div>
+</div>
+<div id="browse-detail" class="detail-panel hidden"></div>
+
+<script src="ob-reader.js"></script>
+<script src="app.js"></script>
+<script>
+const PAGE_SIZE = 50;
+let currentPage = 1;
+
+document.addEventListener('DOMContentLoaded', async () => {
+  try {
+    await App.ready();
+    buildPage(1);
+  } catch (e) {
+    document.getElementById('browse-tbody').innerHTML =
+      `<tr><td colspan="4" class="error">Failed to load dataset: ${App.escapeHtml(e.message)}<br>
+      <small>Requires HTTP server: <code>python3 -m http.server 8080</code></small></td></tr>`;
+  }
+});
+
+document.getElementById('qaType').addEventListener('change', () => buildPage(1));
+document.getElementById('qaSearch').addEventListener('input', () => buildPage(1));
+document.getElementById('lineJump').addEventListener('keydown', e => { if (e.key === 'Enter') jumpLine(); });
+
+function jumpLine() {
+  const v = parseInt(document.getElementById('lineJump').value);
+  if (v >= 1 && v <= 1410) showDetail(v);
+}
+
+function filtered() {
+  const type = document.getElementById('qaType').value;
+  const search = document.getElementById('qaSearch').value.toLowerCase();
+  return App.parsed.map((r, i) => ({ ...r, _idx: i + 1 })).filter(r => {
+    if (type !== 'all' && App.detectType(r._idx) !== type) return false;
+    if (search) {
+      const text = r.messages.map(m => m.content).join(' ').toLowerCase();
+      if (!text.includes(search)) return false;
+    }
+    return true;
+  });
+}
+
+function buildPage(page) {
+  const f = filtered();
+  const total = f.length;
+  const pages = Math.ceil(total / PAGE_SIZE) || 1;
+  if (page < 1) page = 1;
+  if (page > pages) page = pages;
+  currentPage = page;
+  const start = (page - 1) * PAGE_SIZE;
+  const slice = f.slice(start, start + PAGE_SIZE);
+
+  document.getElementById('browse-tbody').innerHTML = slice.map(r => {
+    const q = (r.messages[1]?.content || '').substring(0, 120);
+    const a = (r.messages[2]?.content || '').substring(0, 120);
+    return `<tr data-line="${r._idx}" onclick="showDetail(${r._idx})">
+      <td>${r._idx}</td>
+      <td>${App.escapeHtml(q)}${q.length>120?'...':''}</td>
+      <td>${App.escapeHtml(a)}${a.length>120?'...':''}</td>
+      <td style="font-size:.75rem;color:var(--muted)">${App.detectType(r._idx)}</td>
+    </tr>`;
+  }).join('');
+
+  const p = pages > 1
+    ? `<button class="secondary" onclick="buildPage(1)" ${page===1?'disabled':''}>&#171;</button>
+       <button class="secondary" onclick="buildPage(${page-1})" ${page===1?'disabled':''}>&#8249;</button>
+       <span>Page ${page} / ${pages} (${total} records)</span>
+       <button class="secondary" onclick="buildPage(${page+1})" ${page===pages?'disabled':''}>&#8250;</button>
+       <button class="secondary" onclick="buildPage(${pages})" ${page===pages?'disabled':''}>&#187;</button>`
+    : `<span>${total} records</span>`;
+  document.getElementById('pager').innerHTML = p;
+  document.getElementById('pager2').innerHTML = p;
+}
+
+async function showDetail(lineNo) {
+  document.querySelectorAll('#browse-tbody tr').forEach(tr => tr.classList.remove('selected'));
+  document.querySelector(`#browse-tbody tr[data-line="${lineNo}"]`)?.classList.add('selected');
+
+  const detail = document.getElementById('browse-detail');
+  detail.classList.remove('hidden');
+  detail.innerHTML = '<span class="loading">Loading provenance...</span>';
+
+  const record = App.parsed[lineNo - 1];
+  const msgs = record.messages || [];
+  let qa = '';
+  for (const m of msgs) {
+    qa += `<strong>${m.role.toUpperCase()}</strong>: ${App.escapeHtml(m.content)}<br><br>`;
+  }
+
+  let provHtml = '';
+  try {
+    const result = await App.reader.blame(App.dataset[lineNo - 1]);
+    if (result?.sources?.length) {
+      provHtml = '<hr style="margin:.5rem 0;border-color:var(--border)">';
+      for (const s of result.sources) {
+        const authors = s.authors.map(a => `<a class="author-tag" href="author.html?q=${encodeURIComponent(a.name)}">${App.escapeHtml(a.name)}</a>`).join(' ');
+        provHtml += `<div style="margin-bottom:.5rem;font-size:.8125rem">
+          <strong>${App.escapeHtml(s.path)}</strong> <span class="hash">${s.hash.substring(0,16)}...</span><br>
+          ${authors} &middot; ${App.escapeHtml(s.license)} (${s.year})
+        </div>`;
+      }
+    } else {
+      provHtml = '<hr style="margin:.5rem 0"><em>No provenance data</em>';
+    }
+  } catch (e) {
+    provHtml = `<hr style="margin:.5rem 0"><em>Error: ${App.escapeHtml(e.message)}</em>`;
+  }
+  detail.innerHTML = `<div class="qa-block">${qa}${provHtml}</div>`;
+  detail.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+</script>
+</body>
+</html>

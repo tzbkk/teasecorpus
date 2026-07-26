@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>About — teasecorpus provenance explorer</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<h1>teasecorpus provenance explorer</h1>
+<nav class="nav">
+  <a href="browse.html">Browse</a>
+  <a href="author.html">Author Lookup</a>
+  <a href="about.html" class="active">About</a>
+</nav>
+
+<div class="card">
+  <p class="subtitle" style="margin-bottom:1.25rem">
+    <span class="count">1410</span> ChatML records &middot;
+    <span class="count">23</span> contributors &middot;
+    <span class="count">409</span> wiki pages &middot;
+    CC-BY-SA-3.0
+  </p>
+</div>
+
+<div class="card">
+  <h2>Dataset</h2>
+  <p style="color:var(--muted);font-size:.875rem;line-height:1.6">
+    ChatML SFT dataset generated from the
+    <a href="https://karakai-jouzu-no-takagi-san.fandom.com/zh/">擅长捉弄的高木同学 Fandom wiki</a>,
+    covering 7 categories of QA (chapter, character, episode, music, volume, season, movie).
+    Each record is tracked through a
+    <a href="https://arxiv.org/abs/2607.13037">three-layer content-addressable provenance chain</a>
+    (authors &larr; sections &larr; document-index) that propagates contributor identity
+    from wiki revision histories through the data pipeline.
+  </p>
+  <p style="margin-top:.75rem">
+    <a href="https://huggingface.co/datasets/tzbkk/teasecorpus">tzbkk/teasecorpus on HuggingFace</a>
+  </p>
+</div>
+
+<div class="card">
+  <h2>Provenance</h2>
+  <p style="color:var(--muted);font-size:.875rem;line-height:1.6">
+    Provenance is managed by
+    <a href="https://arxiv.org/abs/2607.13037">OriginBlame (ob)</a>,
+    a record- and token-level data provenance system for AI training datasets.
+    OriginBlame does not discover authorship &mdash; it <em>propagates</em> it: author identity
+    already established in the source environment (wiki revision histories) is carried
+    forward through data processing, preserving the provenance chain across
+    tokenization and packing.
+  </p>
+  <p style="color:var(--muted);font-size:.875rem;line-height:1.6;margin-top:.5rem">
+    The three-tier architecture stores all provenance metadata in plain JSONL under
+    a <code>.ob/</code> directory, sharded into 256 buckets by the first two hex
+    characters of each content hash. This Space reads the <code>.ob/</code> shards
+    directly in the browser via Web Crypto, requiring no server compute.
+  </p>
+  <p style="color:var(--muted);font-size:.875rem;line-height:1.6;margin-top:.5rem">
+    Core capabilities: deterministic author revocation (from 101&times; over-deletion
+    to 1.3&times;), SHA-256 content-addressed idempotent tracking, and
+    process-isolated writes via write-ahead log &mdash; all with zero ML or GPU dependencies.
+  </p>
+</div>
+
+<div class="card">
+  <h2>Links</h2>
+  <ul style="margin: .75rem 0 0 1.25rem; color: var(--text); font-size: .875rem; line-height: 2;">
+    <li><a href="https://huggingface.co/datasets/tzbkk/teasecorpus">tzbkk/teasecorpus</a> &mdash; dataset (HuggingFace)</li>
+    <li><a href="https://github.com/tzbkk/teasecorpus">tzbkk/teasecorpus</a> &mdash; pipeline &amp; this Space (GitHub)</li>
+    <li><a href="https://github.com/tzbkk/rust-originblame">tzbkk/rust-originblame</a> &mdash; OriginBlame provenance engine (GitHub)</li>
+    <li><a href="https://arxiv.org/abs/2607.13037">arXiv:2607.13037</a> &mdash; OriginBlame: Record- and Token-Level Data Provenance for AI Training Datasets</li>
+  </ul>
+</div>
+
+</body>
+</html>

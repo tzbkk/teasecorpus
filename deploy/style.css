@@ -1,0 +1,65 @@
+:root {
+  --bg: #f9fafb; --card: #fff; --text: #111827;
+  --muted: #6b7280; --border: #e5e7eb; --accent: #2563eb; --red: #dc2626;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: var(--bg); color: var(--text); padding: 1.5rem;
+  max-width: 1080px; margin: 0 auto;
+}
+h1 { font-size: 1.5rem; font-weight: 700; margin-bottom: .25rem; }
+h2 { font-size: 1.125rem; margin-bottom: .5rem; }
+.subtitle { color: var(--muted); font-size: .875rem; margin-bottom: 1.5rem; }
+.subtitle a, a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.nav { display: flex; gap: 1rem; margin-bottom: 1.5rem; padding-bottom: .75rem; border-bottom: 2px solid var(--border); }
+.nav a { color: var(--muted); font-size: .875rem; font-weight: 500; }
+.nav a.active { color: var(--accent); border-bottom: 2px solid var(--accent); padding-bottom: .75rem; margin-bottom: -.75rem; }
+.card { background: var(--card); border: 1px solid var(--border); border-radius: .75rem; padding: 1.25rem; margin-bottom: 1rem; }
+.row { display: flex; gap: .75rem; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; }
+input, button, select {
+  font-size: .875rem; padding: .5rem .875rem; border-radius: .5rem;
+  border: 1px solid var(--border); font-family: inherit;
+}
+input:focus { outline: 2px solid var(--accent); border-color: transparent; }
+button {
+  background: var(--accent); color: #fff; border: none; cursor: pointer;
+  font-weight: 500; white-space: nowrap;
+}
+button:hover { opacity: .9; }
+button:disabled { opacity: .4; cursor: default; }
+button.secondary { background: var(--card); color: var(--text); border: 1px solid var(--border); }
+.qa-block { white-space: pre-wrap; font-size: .875rem; line-height: 1.5; }
+.section-list { list-style: none; padding: 0; }
+.section-item { padding: .5rem 0; border-bottom: 1px solid var(--border); font-size: .8125rem; }
+.section-item:last-child { border-bottom: none; }
+.author-tag {
+  display: inline-block; background: #e0e7ff; color: #3730a3; text-decoration: none;
+  border-radius: 1rem; padding: .125rem .5rem; font-size: .75rem; margin: .125rem;
+}
+.author-tag:hover { background: #c7d2fe; text-decoration: underline; }
+table { width: 100%; border-collapse: collapse; font-size: .8125rem; }
+th, td { text-align: left; padding: .5rem .75rem; border-bottom: 1px solid var(--border); }
+th { background: var(--bg); font-weight: 600; color: var(--muted); position: sticky; top: 0; }
+.loading { color: var(--muted); font-style: italic; }
+.loading::before { content: '⏳ '; }
+.error { color: var(--red); }
+.hidden { display: none; }
+.hash { font-family: 'SF Mono', 'Fira Code', monospace; font-size: .75rem; color: var(--muted); }
+.count { font-weight: 600; color: var(--accent); }
+.pagination { display: flex; gap: .25rem; align-items: center; justify-content: center; margin: .5rem 0; }
+.pagination button { padding: .35rem .65rem; font-size: .8125rem; }
+.pagination span { font-size: .8125rem; color: var(--muted); }
+.browse-table { max-height: 60vh; overflow-y: auto; }
+.browse-table tr { cursor: pointer; }
+.browse-table tr:hover, .result-row:hover, #author-tbody tr:hover { background: #eff6ff; }
+.browse-table tr.selected, .result-row.selected { background: #dbeafe; }
+#author-tbody tr { cursor: pointer; }
+.detail-panel { background: var(--card); border: 1px solid var(--border); border-radius: .75rem; padding: 1rem; margin-top: 1rem; }
+.tools { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; }
+.tool-card { background: var(--card); border: 1px solid var(--border); border-radius: .75rem; padding: 1.25rem; }
+.tool-card h2 { margin-bottom: .5rem; }
+.tool-card p { color: var(--muted); font-size: .875rem; margin-bottom: .75rem; line-height: 1.5; }
+.tool-card a { display: inline-block; }
+code { background: var(--bg); padding: .125rem .375rem; border-radius: .25rem; font-size: .8125rem; font-family: 'SF Mono', 'Fira Code', monospace; }
