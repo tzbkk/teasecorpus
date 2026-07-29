@@ -1,66 +1,66 @@
-# Provenance (ob 集成)
+# Provenance (ob Integration)
 
-## 概览
+## Overview
 
-teasecorpus 通过 [originblame](../rust-originblame) 实现每条 ChatML QA 的 record-level provenance 追踪,支持:
+teasecorpus implements record-level provenance tracking for each ChatML QA through [originblame](../rust-originblame), supporting:
 
-- **来源查询**: `ob blame` — 查询某条 QA 来自哪些 wiki contributors
-- **作者撤销**: `ob revoke --email` — 标记某 author 的所有 contributions
-- **物理清理**: `ob purge` — 删除已撤销的 records(可选 --dry-run 预览)
+- **Source Query**: `ob blame` — Query which wiki contributors a QA comes from
+- **Author Revoke**: `ob revoke --email` — Mark all contributions from an author
+- **Physical Purge**: `ob purge` — Delete revoked records (optional --dry-run for preview)
 
-**设计目标**: 未来若某 contributor 的内容需移除(例如版权争议),可精确追踪并批量删除其所有衍生 QA,而不影响其他 valid records。
+**Design Goal**: If a contributor's content needs to be removed in the future (e.g., copyright disputes), it can be precisely tracked and all derivative QAs can be batch deleted without affecting other valid records.
 
-## 架构
+## Architecture
 
 ```
 output/
 ├── .ob/
-│   ├── authors/               # 23 unique contributors(铁桶在 ns0 + 译名表两个 section 都出现)
+│   ├── authors/               # 23 unique contributors (铁桶 appears in both ns0 and 译名表 sections)
 │   ├── sections/              # 24 sections: ns0 × 23 + 译名表 × 1
-│   ├── document-index/        # 每条 QA 的 line_hash + source 映射
+│   ├── document-index/        # line_hash + source mapping for each QA
 │   └── teasecorpus_section_map.json  # cache: {(source, contributor): section_hash}
 ├── .cache/
-│   └── {type}.jsonl           # 中间产物(.gitignore)
-└── dataset.jsonl              # 成品数据集
+│   └── {type}.jsonl           # Intermediate products (.gitignore)
+└── dataset.jsonl              # Final dataset
 ```
 
-### Sections 定义
+### Sections Definition
 
-| source_path | contributors | section 数量 | 用途 |
-|-------------|--------------|--------------|------|
-| `wikidump/ns0.xml` | 23 (21 users + 2 IPs) | 23 | QA 主源(所有 7 pipeline) |
-| `wikidump/擅长捉弄的高木同学wiki.xml::漫画标题译名表` | 铁桶 | 1 | chapter_qa 译名类 QA |
+| source_path | contributors | section count | purpose |
+|-------------|--------------|--------------|---------|
+| `wikidump/ns0.xml` | 23 (21 users + 2 IPs) | 23 | QA main source (all 7 pipelines) |
+| `wikidump/擅长捉弄的高木同学wiki.xml::漫画标题译名表` | 铁桶 | 1 | Translation table QAs for chapter_qa |
 
-每个 `(source_path, contributor)` 组合注册为一个 section,section_hash 用于 `track(source=[hashes])`。
+Each `(source_path, contributor)` combination is registered as a section, and section_hash is used for `track(source=[hashes])`.
 
-## 设置流程
+## Setup Process
 
-### 一次性初始化
+### One-time Initialization
 
 ```bash
 python src/setup_ob.py
 ```
 
-该脚本执行以下步骤:
+This script performs the following steps:
 
-1. **解析 ns0.xml contributors**:
-   - 提取每个 page 的所有 `<revision>` 元素
-   - 聚合每个 contributor 的所有 timestamps
-   - 构建 `{contributor: (wiki_id, year_range_str)}` 映射
+1. **Parse ns0.xml contributors**:
+   - Extract all `<revision>` elements from each page
+   - Aggregate all timestamps for each contributor
+   - Build `{contributor: (wiki_id, year_range_str)}` mapping
 
-2. **cherry-pick 译名表**:
-   - 从 `wikidump/擅长捉弄的高木同学wiki.xml` 提取 `漫画标题译名表` page
-   - 解析该 page 的 contributors(仅铁桶)
+2. **Cherry-pick translation table**:
+   - Extract the `漫画标题译名表` page from `wikidump/擅长捉弄的高木同学wiki.xml`
+   - Parse contributors for that page (only 铁桶)
 
-3. **注册 authors + sections**:
-   - 调用 `author_add(name=username, email={wiki_id}@teasecorpus.invalid)`
-   - 调用 `register_section(path=source_path, authors=[name], year=year_range)`
+3. **Register authors + sections**:
+   - Call `author_add(name=username, email={wiki_id}@teasecorpus.invalid)`
+   - Call `register_section(path=source_path, authors=[name], year=year_range)`
 
-4. **缓存 section_map**:
-   - 保存到 `.ob/teasecorpus_section_map.json`
-   - 格式: `[{"source": "...", "contributor": "...", "hash": "..."}, ...]`
+4. **Cache section_map**:
+   - Save to `.ob/teasecorpus_section_map.json`
+   - Format: `[{"source": "...", "contributor": "...", "hash": "..."}, ...]`
 
-**预期输出**:
+**Expected Output**:
 ```
 ns0.xml: 23 unique contributors
   铁桶: id=32416701 email=32416701@teasecorpus.invalid year='2018-2026'
@@ -72,87 +72,87 @@ registered 24 sections
   - 译名表: 1
 ```
 
-### Author Email 设计
+### Author Email Design
 
-Email 格式: `{wiki_id}@teasecorpus.invalid`
+Email format: `{wiki_id}@teasecorpus.invalid`
 
-- **wiki_id**: Fandom 全局稳定标识符(`<id>` 字段),IP 贡献者用 IP 本身
-- **`.invalid` TLD**: RFC 6761 保留域名,保证 NXDOMAIN(不可送达)
-- **用途**: `ob revoke --email` 的唯一 lookup key
+- **wiki_id**: Fandom global stable identifier (`<id>` field), IP contributors use IP itself
+- **`.invalid` TLD**: RFC 6761 reserved domain, guarantees NXDOMAIN (undeliverable)
+- **Purpose**: Unique lookup key for `ob revoke --email`
 
-示例:
+Examples:
 - 铁桶: `32416701@teasecorpus.invalid`
-- IP 贡献者: `1.2.3.4@teasecorpus.invalid`
+- IP contributor: `1.2.3.4@teasecorpus.invalid`
 
-### Year Range 字段
+### Year Range Field
 
-格式: `"YYYY"` 或 `"YYYY-YYYY"`
+Format: `"YYYY"` or `"YYYY-YYYY"`
 
-- 单年贡献: `"2020"`
-- 多年贡献: `"2018-2026"`
-- 空: `""`
+- Single-year contribution: `"2020"`
+- Multi-year contribution: `"2018-2026"`
+- Empty: `""`
 
-由 `year_range(timestamps)` 函数计算,提取所有 revision timestamps 的年份去重排序。
+Calculated by the `year_range(timestamps)` function, which extracts and deduplicates years from all revision timestamps.
 
-示例:
+Examples:
 ```
-(ns0.xml, 铁桶)        -> "2018-2026" (跨 9 个年份)
-(ns0.xml, Tugiacat666) -> "2020" (单年)
+(ns0.xml, 铁桶)        -> "2018-2026" (spans 9 years)
+(ns0.xml, Tugiacat666) -> "2020" (single year)
 (译名表, 铁桶)          -> "2019-2026"
 ```
 
-## Section 覆盖策略
+## Section Coverage Strategy
 
 ### ns0.xml (23 sections)
 
-覆盖 ns0 命名空间的所有 408 pages,包括:
+Covers all 408 pages in the ns0 namespace, including:
 
-- 247 章节
-- 14 角色
-- 37 剧集
-- 41 音乐
-- 23 卷
-- 3 季度
-- 1 剧场版
+- 247 chapters
+- 14 characters
+- 37 episodes
+- 41 music entries
+- 23 volumes
+- 3 seasons
+- 1 movie
 - 22 unclassified
 
-所有 23 contributors (21 users + 2 IPs) 都在 ns0.xml 有贡献。
+All 23 contributors (21 users + 2 IPs) have contributions in ns0.xml.
 
-### 译名表 (1 section)
+### Translation Table (1 section)
 
-Cherry-pick `擅长捉弄的高木同学wiki.xml` 中的 `漫画标题译名表` page,仅铁桶 1 人贡献。
+Cherry-pick the `漫画标题译名表` page from `擅长捉弄的高木同学wiki.xml`, contributed by only 铁桶.
 
-**为什么 cherry-pick?**
-- 译名表提供章节日文/中文/英文译名,是 chapter_qa 的增量数据源
-- 其他 ns=4 pages(社群规则、元模板等)对 QA 无增量,已 spike 验证
+**Why cherry-pick?**
+- Translation table provides Japanese/Chinese/English translated titles for chapters, an incremental data source for chapter_qa
+- Other ns=4 pages (community rules, meta-templates, etc.) have no incremental value for QAs, verified by spike testing
 
 ## Page-level Attribution
 
-我们选择 **page-level attribution**(而非 ob_util 的 chunk-level):
+We choose **page-level attribution** (rather than ob_util's chunk-level):
 
-- **粒度**: 每个 page 的所有 contributors 合并为一个 source set
-- **section 数量**: 24 个(23 ns0 + 1 译名表)
-- **trade-off**: 更简单,但类型修正者和主要作者同权
+- **Granularity**: All contributors of each page are merged into one source set
+- **Section count**: 24 sections (23 ns0 + 1 translation table)
+- **Trade-off**: Simpler, but typographical fixers have equal rights with main authors
 
-**为什么不选 chunk-level?**
-- chunk-level 用 git-diff 式 blame 将每行归因到最后修改者
-- QA 级 provenance 不需要 line-level 精度
-- chunk-level 会导致 sections 数量庞大(每 chunk × 每 contributor)
+**Why not chunk-level?**
+- chunk-level uses git-diff-style blame to attribute each line to the last modifier
+- QA-level provenance doesn't need line-level precision
+- chunk-level would result in a huge number of sections (each chunk × each contributor)
 
-若未来需要 line-level 精度,可迁移到 ob_util chunk-level 模式。
+If line-level precision is needed in the future, can migrate to ob_util chunk-level mode.
 
-## Pipeline 集成模式
+## Pipeline Integration Pattern
 
-**track 时 file 参数**: 固定为 `dataset.jsonl`(常量),不是中间文件路径。Rust blame 按 hash 查找忽略 file,但 ob show 显示记录里的 file 字段,用成品路径更清晰。
+**File parameter when tracking**: Fixed to `dataset.jsonl` (constant), not intermediate file paths. Rust blame ignores file when looking up by hash, but ob show displays the file field in records, using the final path is clearer.
 
-**line_hash 稳定性**: merge 字节级拼接不改内容,line_hash 从 pipeline → dataset.jsonl 保持一致,`ob blame -d output/ output/dataset.jsonl N` 直接可用。
+**line_hash stability**: merge uses byte-level concatenation without changing content, line_hash remains consistent from pipeline → dataset.jsonl, `ob blame -d output/ output/dataset.jsonl N` can be used directly.
 
-### 1. chapter_qa.py (自定义模式)
+### 1. chapter_qa.py (Custom Mode)
 
-**特点**: 译名类 QA 需包含译名表 section(铁桶)
+**Feature**: Translation QAs need to include translation table section (铁桶)
 
 ```python
-# 自定义 source_extractor
+# Custom source_extractor
 def _extract(item, qa_pair=None):
     contributors = item.get('contributors', set())
     hashes = [
@@ -162,7 +162,7 @@ def _extract(item, qa_pair=None):
     ]
     chap_id = item.get('infobox', {}).get('章节数目', '')
     if chap_id and chap_id in translation_table:
-        # 有译名 → 附加译名表 section
+        # Has translation → append translation table section
         for (src, _contributor), h in section_map.items():
             if src == TRANSLATION_TABLE_PATH:
                 hashes.append(h)
@@ -172,9 +172,9 @@ source_extractor = _extract
 track_fn = track_chatml
 ```
 
-### 2. character/episode/season/movie_qa.py (标准模式)
+### 2. character/episode/season/movie_qa.py (Standard Mode)
 
-使用 `make_source_extractor` 辅助函数:
+Use `make_source_extractor` helper function:
 
 ```python
 source_extractor = make_source_extractor(
@@ -184,9 +184,9 @@ source_extractor = make_source_extractor(
 track_fn = track_chatml
 ```
 
-### 3. music/volume_qa.py (手动模式)
+### 3. music/volume_qa.py (Manual Mode)
 
-Template-only,不走 `run_pipeline`,直接在内层 loop 调用 `track_chatml`:
+Template-only, doesn't go through `run_pipeline`, directly calls `track_chatml` in inner loop:
 
 ```python
 with open(data_path, 'a', encoding='utf-8') as f_out:
@@ -195,14 +195,14 @@ with open(data_path, 'a', encoding='utf-8') as f_out:
         for q, a in qa_pairs:
             chatml = to_chatml(system, q, a)
             f_out.write(json.dumps(chatml, ensure_ascii=False) + '\n')
-            # 手动追踪
+            # Manual tracking
             if track_fn:
                 source_hashes = source_extractor(item, (q, a))
                 if source_hashes:
                     track_chatml(chatml, data_path, source_hashes)
 ```
 
-### run_pipeline 参数
+### run_pipeline Parameters
 
 ```python
 run_pipeline(
@@ -213,180 +213,180 @@ run_pipeline(
 )
 ```
 
-**工作流**:
-1. 每个 QA 写入 JSONL 后,调用 `source_extractor(item, (q, a))`
-2. 若返回 non-empty list,调用 `track_fn(chatml, data_path, section_hashes)`
-3. Track 失败记录到 `.errors.json`,不阻断 pipeline
+**Workflow**:
+1. After each QA is written to JSONL, call `source_extractor(item, (q, a))`
+2. If non-empty list is returned, call `track_fn(chatml, data_path, section_hashes)`
+3. Track failures are recorded to `.errors.json`, doesn't block pipeline
 
-## PID 文件生命周期
+## PID File Lifecycle
 
-### 写入
+### Writing
 
-`track()` 写入临时 PID 文件: `.ob/docidx.{pid}`
+`track()` writes temporary PID file: `.ob/docidx.{pid}`
 
-- 每次 `track()` 调用追加一条 entry(`(line_hash, file, sources)` 三元组)
-- JSONL 与 PID 文件均按 item 节奏 flush(item 完成后 fsync JSONL)
+- Each `track()` call appends an entry (`(line_hash, file, sources)` triple)
+- Both JSONL and PID files are flushed at item rhythm (fsync JSONL after item completion)
 
 ### Merge
 
-`clean_ob()` 合并所有 PID 文件到 manifest shards:
+`clean_ob()` merges all PID files into manifest shards:
 
-- **启动时调用**: 吸收上次崩溃留下的 PID 文件
-- **结束时调用**: 确保查询立即可用
-- **幂等性**: 无 PID 文件时 no-op
+- **Called at startup**: Absorb PID files left from previous crash
+- **Called at completion**: Ensure queries are immediately available
+- **Idempotency**: No-op if no PID files exist
 
-merge_outputs.py 跑完后,所有 records 的 file 字段都指向 `dataset.jsonl`,可在成品上直接 `ob blame`。
+After merge_outputs.py runs, all records' file fields point to `dataset.jsonl`, can `ob blame` directly on the final product.
 
-### 查询时机
+### Query Timing
 
-必须在 `clean_ob()` 之后才能 `ob blame` / `ob show`:
+Must wait until after `clean_ob()` to `ob blame` / `ob show`:
 
 ```
-pipeline 运行 → track() 写 PID → clean_ob() merge → ob blame 可用
+pipeline runs → track() writes PID → clean_ob() merge → ob blame available
 ```
 
-### 防止冲突
+### Conflict Prevention
 
-每个 pipeline 启动 + 结束都调 `clean_ob()`:
+Each pipeline startup and completion both call `clean_ob()`:
 
-- 启动时: 清理上次崩溃遗留
-- 结束时: 确保本次数据立即可查
+- At startup: Clean up leftovers from previous crash
+- At completion: Ensure this run's data is immediately queryable
 
-PID 文件冲突会 silently lose 数据,必须遵守此流程。
+PID file conflicts will silently lose data, must follow this workflow.
 
-## 查询/撤销
+## Query/Revoke
 
-### ob blame — 查询某条 QA 的来源
+### ob blame — Query source of a QA
 
 ```bash
 ob blame -d output/ output/dataset.jsonl 1
 ```
 
-输出该 QA 的所有 section contributors。
+Outputs all section contributors for that QA.
 
-### ob show — 查询某 author 的所有 records
+### ob show — Query all records of an author
 
 ```bash
 ob show -d output/ --email "32416701@teasecorpus.invalid"
 ```
 
-显示铁桶的所有 QA records(默认排除 revoked,加 `--revoked` 显示已撤销)。
+Shows all QA records for 铁桶 (default excludes revoked, add `--revoked` to show revoked ones).
 
-### ob revoke — 撤销 author(toggle)
+### ob revoke — Revoke author (toggle)
 
 ```bash
 ob revoke -d output/ --email "32416701@teasecorpus.invalid"
 ```
 
-标记铁桶 author.revoked=True,lazy cascade 到所有相关 sections + QA records。
+Marks 铁桶 author.revoked=True, lazily cascades to all related sections + QA records.
 
-- **toggle 模式**: 再次调用撤销 revoke(`--reverse` 恢复)
-- **lazy cascade**: 写端只 tag,查询时自动过滤
+- **Toggle mode**: Calling again revokes revoke (`--reverse` to restore)
+- **Lazy cascade**: Write side only tags, queries automatically filter
 
-### ob purge — 物理删除
+### ob purge — Physical Delete
 
 ```bash
-ob purge -d output/ output/dataset.jsonl --dry-run  # 预览
-ob purge -d output/ output/dataset.jsonl            # 执行
+ob purge -d output/ output/dataset.jsonl --dry-run  # Preview
+ob purge -d output/ output/dataset.jsonl            # Execute
 ```
 
-物理删除已 revoked 的 records from JSONL 文件。
+Physically delete revoked records from JSONL file.
 
-**注意事项**:
-- 必须先 `ob revoke` 才能 `ob purge`
-- `--dry-run` 预览,防止误删
-- 重跑 pipeline 前建议 `ob purge` 清理旧记录
+**Notes**:
+- Must `ob revoke` before `ob purge`
+- `--dry-run` to preview, prevent accidental deletion
+- Recommend `ob purge` before re-running pipeline to clean old records
 
-### ob status — 统计
+### ob status — Statistics
 
 ```bash
 ob status -d output/
 ```
 
-显示:
-- Authors 数量
-- Sections 数量
-- Manifest entries 数量
+Shows:
+- Number of authors
+- Number of sections
+- Number of manifest entries
 
-## 故障排查
+## Troubleshooting
 
 ### "ob provenance: DISABLED (...)"
 
-**原因**: `setup_ob.py` 未运行或 ob 包不可 import
+**Cause**: `setup_ob.py` not run or ob package not importable
 
-**解决**:
+**Solution**:
 ```bash
-python src/setup_ob.py  # 注册 sections
+python src/setup_ob.py  # Register sections
 python -c "from ob import init, track; from ob.api import _NATIVE; print(f'OK _NATIVE={_NATIVE}')"
 ```
 
-### track 失败进 .errors.json
+### track fails into .errors.json
 
-**可能原因**:
-- section_map 缓存过期,需重跑 `setup_ob.py`
-- PID 文件冲突,多个 pipeline 同时运行
-- ob 包未正确安装(`_NATIVE=False`)
+**Possible causes**:
+- section_map cache outdated, need to rerun `setup_ob.py`
+- PID file conflict, multiple pipelines running simultaneously
+- ob package not correctly installed (`_NATIVE=False`)
 
-**解决**:
-1. 检查 `.errors.json` 内容
-2. 重跑 `setup_ob.py` 更新 section_map
-3. 确保 pipeline 单线程运行
+**Solution**:
+1. Check `.errors.json` content
+2. Rerun `setup_ob.py` to update section_map
+3. Ensure pipeline runs single-threaded
 
-### `ob status` Authors 数 > 24
+### `ob status` Authors count > 24
 
-**原因**: `author_add` 重复调用(幂等,无害)
+**Cause**: `author_add` called repeatedly (idempotent, harmless)
 
-**解决**: 忽略,不影响功能
+**Solution**: Ignore, doesn't affect functionality
 
-### ob blame / ob show 返回空
+### ob blame / ob show returns empty
 
-**原因**: 未调用 `clean_ob()` 合并 PID 文件
+**Cause**: `clean_ob()` not called to merge PID files
 
-**解决**:
+**Solution**:
 ```bash
-ob clean -d output/  # 合并后即可查询
+ob clean -d output/  # Query available after merge
 ```
 
-## HuggingFace 发布
+## HuggingFace Release
 
-发布包包含三个核心文件:
+Release package contains three core files:
 
-- `dataset.jsonl` — 成品数据集,所有 QA 的 line_hash 与 .ob/document-index/ 对应
-- `README.md` — dataset card,说明数据来源、用途、许可证
-- `LICENSE` — 许可证文件
+- `dataset.jsonl` — Final dataset, all QAs' line_hashes correspond to .ob/document-index/
+- `README.md` — Dataset card, explaining data sources, usage, license
+- `LICENSE` — License file
 
-用户可从 HuggingFace Hub 下载 `dataset.jsonl`,用 `ob blame -d output/ output/dataset.jsonl N` 直接查询来源。
+Users can download `dataset.jsonl` from HuggingFace Hub and query sources directly with `ob blame -d output/ output/dataset.jsonl N`.
 
-## 不集成的事
+## What's Not Integrated
 
-以下功能不在 teasecorpus 集成范围内:
+The following features are not in teasecorpus integration scope:
 
 ### DEP-5 export
 
-`ob export-copyright` 可导出版权文件,但不进入 pipeline workflow。
+`ob export-copyright` can export copyright files, but doesn't enter pipeline workflow.
 
 ### Embedding reconcile
 
-dump 是静态快照,不需 reconcile(仅适用于持续更新的数据集)。
+Dump is a static snapshot, doesn't need reconcile (only applicable to continuously updated datasets).
 
 ### Token-level tracking
 
-QA 级 provenance 不需要 tokenizer 级追踪。
+QA-level provenance doesn't need tokenizer-level tracking.
 
-### PII 剥离
+### PII Stripping
 
-当前实现保留 `name` + `email` 字段。生产部署可按论文 §6 剥离 PII:
+Current implementation preserves `name` + `email` fields. Production deployment can strip PII per paper §6:
 
 ```bash
-# 可选:从 .ob/authors/ 移除 name/email,只留 SHA-256 id
+# Optional: Remove name/email from .ob/authors/, keep only SHA-256 id
 ```
 
 ### Source stack
 
-不使用 `source.append/pop` 模式(thread-local per-file),改用 explicit `track(source=[hashes])` 实现精确的 per-page contributor 粒度。
+Doesn't use `source.append/pop` pattern (thread-local per-file), instead uses explicit `track(source=[hashes])` to implement precise per-page contributor granularity.
 
-## 参考文献
+## References
 
-- [OriginBlame 论文](https://arxiv.org/abs/2405.06332)
+- [OriginBlame paper](https://arxiv.org/abs/2405.06332)
 - [RFC 6761 — Reserved Top Level DNS Names](https://www.rfc-editor.org/rfc/rfc6761)
-- [RFC 6762 — Multicast DNS](https://www.rfc-editor.org/rfc/rfc6762) (为什么不用 .local)
+- [RFC 6762 — Multicast DNS](https://www.rfc-editor.org/rfc/rfc6762) (why not use .local)

@@ -1,60 +1,60 @@
-# Dump 管理
+# Dump Management
 
-## 下载完整 dump
+## Download Full Dump
 
 ```bash
 python src/pipeline_preproc/download_dump.py
 ```
 
-全量下载 ns0(main) + ns4(project) 命名空间，含完整 revision history。
+Full download of ns0(main) + ns4(project) namespaces, including complete revision history.
 
-**选项**:
+**Options**:
 
-| 参数 | 说明 |
-|------|------|
-| `--ns 0 4` | 指定命名空间 |
-| `--force` | 强制重下载(覆盖已有 + progress) |
-| `--list-only` | 只列出页面标题,不下载 |
-| `--delay 2.0` | 请求间隔秒(默认 1.0) |
+| Parameter | Description |
+|-----------|-------------|
+| `--ns 0 4` | Specify namespaces |
+| `--force` | Force re-download (overwrite existing + progress) |
+| `--list-only` | Only list page titles, do not download |
+| `--delay 2.0` | Request interval in seconds (default 1.0) |
 
-**断点续传**: `.progress.json` 记录 `last_completed_idx`，中断后重跑自动续。
+**Resumable download**: `.progress.json` records `last_completed_idx`, automatically resumes on rerun after interruption.
 
-## 增量更新
+## Incremental Updates
 
 ```bash
 python src/pipeline_preproc/update_dump.py
 ```
 
-基于 `recentchanges` API，下载上次全量以来的增量修订。
+Download incremental revisions since the last full dump based on the `recentchanges` API.
 
-**产物**:
-
-```
-wikidump/ns0.delta.20250101-120000.xml      # 增量 XML
-wikidump/ns0.deleted.20250101-120000.txt     # 删除/移动清单(有事件时)
-```
-
-**限制**:
-- 窗口: 30 天(超过 25 天会 warning)
-- 不修改原全量 dump 文件
-- 合并回全量: 手动或 `download_dump.py --force`
-
-## 数据画像(spike 数据)
-
-| dump | ns | pages | 用途 |
-|------|-----|-------|------|
-| ns0.xml | 0 (main) | 408 | 章节/角色/剧集/音乐/卷/季度/剧场版 |
-| 擅长捉弄的高木同学wiki.xml | 4 (project) | 26 | 译名表 cherry-pick / 社群规则页 |
-
-### ns0.xml 内容分布
+**Artifacts**:
 
 ```
-247 章节 + 14 角色 + 37 剧集 + 41 音乐 + 23 卷 + 3 季度 + 1 剧场版
-+ 22 unclassified (画廊/沙盒) = 408 页
+wikidump/ns0.delta.20250101-120000.xml      # Incremental XML
+wikidump/ns0.deleted.20250101-120000.txt     # Deletion/move list (when events occur)
+```
+
+**Limitations**:
+- Window: 30 days (warning if over 25 days)
+- Does not modify original full dump files
+- Merge back to full: manual or `download_dump.py --force`
+
+## Data Profile (spike data)
+
+| dump | ns | pages | purpose |
+|------|-----|-------|---------|
+| ns0.xml | 0 (main) | 408 | chapters/characters/episodes/music/volumes/seasons/movies |
+| 擅长捉弄的高木同学wiki.xml | 4 (project) | 26 | translation table cherry-pick / community rule pages |
+
+### ns0.xml Content Distribution
+
+```
+247 chapters + 14 characters + 37 episodes + 41 music + 23 volumes + 3 seasons + 1 movies
++ 22 unclassified (gallery/sandbox) = 408 pages
 
 Contributors: 23 (21 users + 2 IPs)
-铁桶: 2018-2026 (跨所有 page)
+铁桶: 2018-2026 (across all pages)
 Lunisha Kumina: 2024-2026
 ```
 
-注: `setup_ob.py` 会从 dump 中提取这些 contributor 统计来注册 ob sections。每个 contributor 的 year_range 由其在该 page 的所有 revision timestamps 计算得出。
+Note: `setup_ob.py` extracts these contributor statistics from the dump to register ob sections. Each contributor's year_range is calculated from all revision timestamps for that page.
