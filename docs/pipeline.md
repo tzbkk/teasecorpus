@@ -11,7 +11,7 @@ setup_ob.py (one-time)    contributors → .ob/authors/ + .ob/sections/
         ↓
 pipeline_qa_gen/*.py      LLM / template → output/.cache/{type}.jsonl
         ↓                          ↓
-                        ob.track(file='dataset.jsonl') → .ob/document-index/
+                        ob.track → output/.ob/document-index/
         ↓
 merge_outputs.py          output/.cache/*.jsonl → dataset.jsonl (byte-level concatenation)
 ```
@@ -87,7 +87,7 @@ Returned item dict structure (using chapter as example):
 item → build_prompt() → call_llm() → parse_response() → filter_tautological() → QA pairs
                                                                     ↑
                               template_qa fallback                        ↓
-                             (on LLM fail/empty/wrong format)     to_chatml()
+                              (on LLM fail/empty/wrong format)     to_chatml()
 ```
 
 `run_pipeline()` unified control:
@@ -146,11 +146,29 @@ Pipeline supports record-level provenance tracking, integrate via originblame th
 
 **line_hash stability**: merge byte-level concatenation doesn't modify content, line_hash remains consistent from pipeline → dataset.jsonl.
 
+**Section model**: One section per wiki page, with all contributors as group authors.
+
+```python
+# section_map = {page_title: section_hash}
+# section_hash = SHA-256({path=page_title, authors=all_contributors_of_page, license, year})
+
+# Standard extractor (character/episode/season/movie)
+source_extractor = make_source_extractor(section_map)
+
+# Chapter extractor (includes translation table)
+source_extractor = make_chapter_source_extractor(section_map, translation_table)
+
+# Called per-QA during pipeline
+section_hashes = source_extractor(item, qa_pair)  # -> list[section_hash] | None
+```
+
 **Data flow**:
 ```
-setup_ob.py (one-time) → Register 24 sections (23 contributors + 铁桶@translation table)
+setup_ob.py (one-time) → Register 409 page-level sections (one per wiki page)
                         ↓
-During pipeline run → track(file='dataset.jsonl') writes .ob/docidx.{pid} → clean_ob() merge
+During pipeline run → track_chatml(chatml, file='dataset.jsonl', source=section_hashes)
+                        ↓
+                      writes .ob/docidx.{pid} → clean_ob() merge
                         ↓
 Query capability   → ob blame -d output/ output/dataset.jsonl N / ob show / ob revoke / ob purge
 ```

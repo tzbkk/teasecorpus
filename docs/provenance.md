@@ -2,391 +2,336 @@
 
 ## Overview
 
-teasecorpus implements record-level provenance tracking for each ChatML QA through [originblame](../rust-originblame), supporting:
+teasecorpus implements record-level provenance tracking for every ChatML QA pair through [originblame](https://pypi.org/project/originblame/), enabling:
 
-- **Source Query**: `ob blame` — Query which wiki contributors a QA comes from
-- **Author Revoke**: `ob revoke --email` — Mark all contributions from an author
-- **Physical Purge**: `ob purge` — Delete revoked records (optional --dry-run for preview)
+- **Source Query**: `ob blame` — list which wiki contributors a given QA derives from
+- **Author Revoke**: `ob revoke --email` — soft-revoke all contributions from one author
+- **Physical Purge**: `ob purge` — delete revoked records from the dataset (supports `--dry-run`)
 
-**Design Goal**: If a contributor's content needs to be removed in the future (e.g., copyright disputes), it can be precisely tracked and all derivative QAs can be batch deleted without affecting other valid records.
+**Design goal**: if a contributor's content ever needs removal (e.g., a copyright dispute), their derivative QAs can be located and batch-deleted precisely, without affecting other records.
 
 ## Architecture
 
 ```
-output/
+output/                              # OB_DIR (the ob root)
 ├── .ob/
-│   ├── authors/               # 23 unique contributors (铁桶 appears in both ns0 and 译名表 sections)
-│   ├── sections/              # 24 sections: ns0 × 23 + 译名表 × 1
-│   ├── document-index/        # line_hash + source mapping for each QA
-│   └── teasecorpus_section_map.json  # cache: {(source, contributor): section_hash}
+│   ├── authors/                     # 23 unique contributors (21 users + 2 IPs)
+│   ├── sections/                    # 409 page-level sections
+│   ├── document-index/              # line_hash + source mapping for each QA
+│   └── teasecorpus_section_map.json # cache: {page_title -> section_hash}
 ├── .cache/
-│   └── {type}.jsonl           # Intermediate products (.gitignore)
-└── dataset.jsonl              # Final dataset
+│   └── {type}.jsonl                 # intermediate artifacts (.gitignore)
+└── dataset.jsonl                    # final merged dataset (the tracked file)
 ```
 
-### Sections Definition
+### Section model — one section per wiki page
 
-| source_path | contributors | section count | purpose |
-|-------------|--------------|--------------|---------|
-| `wikidump/ns0.xml` | 23 (21 users + 2 IPs) | 23 | QA main source (all 7 pipelines) |
-| `wikidump/擅长捉弄的高木同学wiki.xml::漫画标题译名表` | 铁桶 | 1 | Translation table QAs for chapter_qa |
+The unit of attribution is the **wiki page**, not the contributor. Each page becomes exactly one section:
 
-Each `(source_path, contributor)` combination is registered as a section, and section_hash is used for `track(source=[hashes])`.
+```
+section_hash = SHA-256({ path, authors, license, year })
+  path    = page title (unique within the wiki)
+  authors = ALL contributors of that page, as one group
+  license = "CC-BY-SA-3.0"
+  year    = union year range of every revision on that page
+```
 
-## Setup Process
+This follows originblame's three-tier model (path / authors / license / year) at the coarsest meaningful granularity for QA-level provenance.
 
-### One-time Initialization
+| source                                                                | pages | sections | contributors           |
+|-----------------------------------------------------------------------|-------|----------|------------------------|
+| `wikidump/ns0.xml`                                                    | 408   | 408      | 23 (21 users + 2 IPs)  |
+| `wikidump/擅长捉弄的高木同学wiki.xml` (cherry-picked `译名表` page)   | 1     | 1        | 铁桶                   |
+| **Total**                                                             | **409** | **409** | 23 unique              |
+
+**Why page-level rather than chunk-level?**
+
+- QA-level provenance doesn't need line-level precision.
+- All contributors of a page are merged into one source set — simpler and stable across runs.
+- Chunk-level (git-diff-style blame attributing each line to its last modifier) would explode section count (chunk × contributor) without value for downstream revoke.
+- Trade-off: a typo fixer shares equal attribution with the main author of a page. Acceptable for a fan-wiki corpus.
+
+### Section coverage
+
+ns0.xml's 408 pages cover all 7 QA pipelines (chapter / character / episode / music / volume / season / movie) plus unclassified pages. The cherry-picked `擅长捉弄的高木同学wiki:漫画标题译名表` page provides Japanese/Chinese translated titles for `chapter_qa.py`. Other ns=4 pages (community rules, meta-templates, etc.) carry no QA-relevant signal and are deliberately excluded.
+
+## Setup
+
+### One-time initialization
 
 ```bash
 python src/setup_ob.py
 ```
 
-This script performs the following steps:
+Pipeline (`src/setup_ob.py`):
 
-1. **Parse ns0.xml contributors**:
-   - Extract all `<revision>` elements from each page
-   - Aggregate all timestamps for each contributor
-   - Build `{contributor: (wiki_id, year_range_str)}` mapping
+1. **Parse ns0.xml** — `load_dump()` returns per-page contributor maps: `{page_title -> {contributor_name -> [timestamps]}}` and `{contributor_name -> wiki_id_or_ip}`.
+2. **Cherry-pick `译名表`** — `load_cherry_pick_page()` extracts that single page from `擅长捉弄的高木同学wiki.xml` and merges its contributors into the same maps.
+3. **`init_ob()`** — calls `ob.init(ob_dir=output)`.
+4. **`register_all_pages()`** — for each page (sorted), register one section.
+5. **`save_section_map()`** — write the `{page_title -> section_hash}` cache to `output/.ob/teasecorpus_section_map.json`.
 
-2. **Cherry-pick translation table**:
-   - Extract the `漫画标题译名表` page from `wikidump/擅长捉弄的高木同学wiki.xml`
-   - Parse contributors for that page (only 铁桶)
+### Per-page registration
 
-3. **Register authors + sections**:
-   - Call `author_add(name=username, email={wiki_id}@teasecorpus.invalid)`
-   - Call `register_section(path=source_path, authors=[name], year=year_range)`
-
-4. **Cache section_map**:
-   - Save to `.ob/teasecorpus_section_map.json`
-   - Format: `[{"source": "...", "contributor": "...", "hash": "..."}, ...]`
-
-**Expected Output**:
-```
-ns0.xml: 23 unique contributors
-  铁桶: id=32416701 email=32416701@teasecorpus.invalid year='2018-2026'
-  Lunisha Kumina: id=55584564 email=55584564@teasecorpus.invalid year='2024-2026'
-  ...
-译名表: 铁桶 id=32416701 email=32416701@teasecorpus.invalid year='2019-2026'
-registered 24 sections
-  - ns0.xml: 23
-  - 译名表: 1
-```
-
-### Author Email Design
-
-Email format: `{wiki_id}@teasecorpus.invalid`
-
-- **wiki_id**: Fandom global stable identifier (`<id>` field), IP contributors use IP itself
-- **`.invalid` TLD**: RFC 6761 reserved domain, guarantees NXDOMAIN (undeliverable)
-- **Purpose**: Unique lookup key for `ob revoke --email`
-
-Examples:
-- 铁桶: `32416701@teasecorpus.invalid`
-- IP contributor: `1.2.3.4@teasecorpus.invalid`
-
-### Year Range Field
-
-Format: `"YYYY"` or `"YYYY-YYYY"`
-
-- Single-year contribution: `"2020"`
-- Multi-year contribution: `"2018-2026"`
-- Empty: `""`
-
-Calculated by the `year_range(timestamps)` function, which extracts and deduplicates years from all revision timestamps.
-
-Examples:
-```
-(ns0.xml, 铁桶)        -> "2018-2026" (spans 9 years)
-(ns0.xml, Tugiacat666) -> "2020" (single year)
-(译名表, 铁桶)          -> "2019-2026"
-```
-
-## Section Coverage Strategy
-
-### ns0.xml (23 sections)
-
-Covers all 408 pages in the ns0 namespace, including:
-
-- 247 chapters
-- 14 characters
-- 37 episodes
-- 41 music entries
-- 23 volumes
-- 3 seasons
-- 1 movie
-- 22 unclassified
-
-All 23 contributors (21 users + 2 IPs) have contributions in ns0.xml.
-
-### Translation Table (1 section)
-
-Cherry-pick the `漫画标题译名表` page from `擅长捉弄的高木同学wiki.xml`, contributed by only 铁桶.
-
-**Why cherry-pick?**
-- Translation table provides Japanese/Chinese/English translated titles for chapters, an incremental data source for chapter_qa
-- Other ns=4 pages (community rules, meta-templates, etc.) have no incremental value for QAs, verified by spike testing
-
-## Page-level Attribution
-
-We choose **page-level attribution** (rather than ob_util's chunk-level):
-
-- **Granularity**: All contributors of each page are merged into one source set
-- **Section count**: 24 sections (23 ns0 + 1 translation table)
-- **Trade-off**: Simpler, but typographical fixers have equal rights with main authors
-
-**Why not chunk-level?**
-- chunk-level uses git-diff-style blame to attribute each line to the last modifier
-- QA-level provenance doesn't need line-level precision
-- chunk-level would result in a huge number of sections (each chunk × each contributor)
-
-If line-level precision is needed in the future, can migrate to ob_util chunk-level mode.
-
-## Pipeline Integration Pattern
-
-**File parameter when tracking**: Fixed to `dataset.jsonl` (constant), not intermediate file paths. Rust blame ignores file when looking up by hash, but ob show displays the file field in records, using the final path is clearer.
-
-**line_hash stability**: merge uses byte-level concatenation without changing content, line_hash remains consistent from pipeline → dataset.jsonl, `ob blame -d output/ output/dataset.jsonl N` can be used directly.
-
-### 1. chapter_qa.py (Custom Mode)
-
-**Feature**: Translation QAs need to include translation table section (铁桶)
+`register_page_section(page_title, contributor_names, contributor_ids, year_str)`:
 
 ```python
-# Custom source_extractor
-def _extract(item, qa_pair=None):
-    contributors = item.get('contributors', set())
-    hashes = [
-        section_map[(NS0_PATH, c)]
-        for c in contributors
-        if (NS0_PATH, c) in section_map
-    ]
-    chap_id = item.get('infobox', {}).get('章节数目', '')
-    if chap_id and chap_id in translation_table:
-        # Has translation → append translation table section
-        for (src, _contributor), h in section_map.items():
-            if src == TRANSLATION_TABLE_PATH:
-                hashes.append(h)
-    return hashes
-
-source_extractor = _extract
-track_fn = track_chatml
-```
-
-### 2. character/episode/season/movie_qa.py (Standard Mode)
-
-Use `make_source_extractor` helper function:
-
-```python
-source_extractor = make_source_extractor(
-    section_map,
-    source_path='wikidump/ns0.xml',
+for name in contributor_names:
+    wid = contributor_ids.get(name, name)
+    author_add(name=name, email=f'{wid}@teasecorpus.invalid', ob_dir=OB_DIR)
+return register_section(
+    path=page_title,
+    authors=contributor_names,   # ALL contributors of this page, as a group
+    license='CC-BY-SA-3.0',
+    year=year_str,
+    ob_dir=OB_DIR,
 )
+```
+
+`register_all_pages()` aggregates every revision timestamp across all contributors on a page and passes the union year range to `year_range()`.
+
+### Author email format
+
+`{wiki_id}@teasecorpus.invalid`
+
+- **`wiki_id`**: Fandom stable `<id>` for registered users; the raw IP string for anonymous editors.
+- **`.invalid` TLD**: RFC 6761 reserved — guaranteed NXDOMAIN, undeliverable, unambiguous as a synthetic key.
+- **Purpose**: stable lookup key for `ob revoke --email`.
+
+Examples:
+
+| contributor | wiki_id | email |
+|-------------|---------|-------|
+| 铁桶 (top contributor, 2018–2026) | 32416701 | `32416701@teasecorpus.invalid` |
+| anonymous editor | `1.2.3.4` | `1.2.3.4@teasecorpus.invalid` |
+
+### Year range field
+
+`year_range(timestamps)` formats the union of all revision years on a page:
+
+- single year → `"2020"`
+- multi year  → `"2018-2026"`
+- empty       → `""`
+
+Because the year is computed across **all contributors on the page**, the same page-section year span reflects the page's full edit history (not any individual contributor's).
+
+### section_map cache
+
+On-disk format (`output/.ob/teasecorpus_section_map.json`, UTF-8, sorted by page title):
+
+```json
+[
+  {"page": "<page_title>", "hash": "<sha256>"},
+  ...
+]
+```
+
+In-memory format returned by `load_section_map()` is `{page_title -> section_hash}`. If the cache is missing, `load_section_map()` raises `RuntimeError` instructing to run `setup_ob.py` — pipelines catch this and degrade to provenance-disabled mode.
+
+## Pipeline Integration
+
+All seven QA pipelines call into the same two helpers:
+
+```python
+source_extractor = make_source_extractor(section_map)        # standard
+# or
+source_extractor = make_chapter_source_extractor(section_map, translation_table)  # chapter only
+
 track_fn = track_chatml
 ```
 
-### 3. music/volume_qa.py (Manual Mode)
+### `make_source_extractor(section_map)` — standard
 
-Template-only, doesn't go through `run_pipeline`, directly calls `track_chatml` in inner loop:
+Returns `(item, qa_pair=None) -> list[section_hash] | None`. Looks up `item['title']` in `section_map`. One section per page. Used by character / episode / music / volume / season / movie pipelines.
 
 ```python
-with open(data_path, 'a', encoding='utf-8') as f_out:
-    for item in items:
-        qa_pairs = template_qa_for_volume(item)
-        for q, a in qa_pairs:
-            chatml = to_chatml(system, q, a)
-            f_out.write(json.dumps(chatml, ensure_ascii=False) + '\n')
-            # Manual tracking
-            if track_fn:
-                source_hashes = source_extractor(item, (q, a))
-                if source_hashes:
-                    track_chatml(chatml, data_path, source_hashes)
+def extract(item, qa_pair=None):
+    title = item.get('title')
+    if title and title in section_map:
+        return [section_map[title]]
+    return None
 ```
 
-### run_pipeline Parameters
+### `make_chapter_source_extractor(section_map, translation_table)` — chapter-specific
+
+Returns the page section hash, **plus** the `译名表` page section hash when the chapter has an entry in the translation table. This is because translation-table data (jp / zh titles authored by 铁桶) is injected into the chapter prompt, so its derived QAs must trace back to both the chapter page **and** the translation-table page.
+
+```python
+def extract(item, qa_pair=None):
+    hashes = []
+    title = item.get('title')
+    if title and title in section_map:
+        hashes.append(section_map[title])               # chapter page section
+    chap_id = item.get('infobox', {}).get('章节数目', '')
+    if chap_id and chap_id in translation_table and tt_hash:
+        hashes.append(tt_hash)                          # 译名表 page section
+    return hashes if hashes else None
+```
+
+`tt_hash` is resolved once from `section_map[TRANSLATION_TABLE_TITLE]` where `TRANSLATION_TABLE_TITLE = '擅长捉弄的高木同学wiki:漫画标题译名表'`.
+
+### `track_chatml(chatml, file_path, section_hashes)`
+
+```python
+track(chatml, file='dataset.jsonl', source=section_hashes, ob_dir=OB_DIR)
+```
+
+The `file_path` argument is **deliberately ignored** — tracking always records `file='dataset.jsonl'` (the `DATASET_PATH` constant). This way, after `merge_outputs.py` byte-concatenates the per-type caches into the final `output/dataset.jsonl`, `ob blame` resolves records directly against the final file. Intermediate per-type paths never appear in the document index.
+
+### Pipeline bootstrap pattern
+
+Every pipeline follows the same try/except pattern, so a missing section_map or unimportable `ob` package disables provenance without crashing generation:
+
+```python
+try:
+    section_map = load_section_map()
+    clean_ob()                                           # absorb crash leftovers
+    source_extractor = make_source_extractor(section_map)
+    track_fn = track_chatml
+    print('>> ob provenance: ENABLED', flush=True)
+except (RuntimeError, ImportError) as e:
+    source_extractor = None
+    track_fn = None
+    print(f'>> ob provenance: DISABLED ({type(e).__name__}: {e})', flush=True)
+```
+
+After the pipeline completes, a final `clean_ob()` merges pending PID files so queries work immediately:
+
+```python
+if track_fn is not None:
+    merged = clean_ob()
+    print(f'>> ob clean: merged {merged} records', flush=True)
+```
+
+### `run_pipeline` contract
 
 ```python
 run_pipeline(
     items, build_prompt, build_template_qa, decontextualize,
     system, output_subdir, delay, max_items, item_id_fn,
-    source_extractor=None,  # (item, qa_pair) -> list[section_hash] | None
-    track_fn=None,          # (chatml, file_path, section_hashes) -> None
+    source_extractor=None,   # (item, qa_pair) -> list[section_hash] | None
+    track_fn=None,           # (chatml, file_path, section_hashes) -> None
 )
 ```
 
-**Workflow**:
-1. After each QA is written to JSONL, call `source_extractor(item, (q, a))`
-2. If non-empty list is returned, call `track_fn(chatml, data_path, section_hashes)`
-3. Track failures are recorded to `.errors.json`, doesn't block pipeline
+For each generated QA pair: write the ChatML line to the per-type cache JSONL, then if `source_extractor(item, (q, a))` returns a non-empty list, call `track_fn(chatml, data_path, section_hashes)`. Track failures are logged to `.errors.json` and never block generation.
 
 ## PID File Lifecycle
 
-### Writing
+### Write
 
-`track()` writes temporary PID file: `.ob/docidx.{pid}`
+`ob.track()` appends a `(line_hash, file, sources)` entry to a per-process PID file `output/.ob/docidx.{pid}`. Each pipeline flushes both the JSONL and the PID file at item granularity.
 
-- Each `track()` call appends an entry (`(line_hash, file, sources)` triple)
-- Both JSONL and PID files are flushed at item rhythm (fsync JSONL after item completion)
+### Merge — `clean_ob()`
 
-### Merge
-
-`clean_ob()` merges all PID files into manifest shards:
-
-- **Called at startup**: Absorb PID files left from previous crash
-- **Called at completion**: Ensure queries are immediately available
-- **Idempotency**: No-op if no PID files exist
-
-After merge_outputs.py runs, all records' file fields point to `dataset.jsonl`, can `ob blame` directly on the final product.
-
-### Query Timing
-
-Must wait until after `clean_ob()` to `ob blame` / `ob show`:
-
-```
-pipeline runs → track() writes PID → clean_ob() merge → ob blame available
+```python
+from ob._ob_native import clean as _native_clean
+result = _native_clean(str(OB_DIR), False)
+return result.get('document_merged', 0) if isinstance(result, dict) else 0
 ```
 
-### Conflict Prevention
+`ob._ob_native` is the PyO3 native module shipped with the pip-installed `originblame` package. `clean_ob()` is called at two points:
 
-Each pipeline startup and completion both call `clean_ob()`:
+- **pipeline start** — absorb PID files left over from a previous crash;
+- **pipeline end** — make this run's records immediately queryable.
 
-- At startup: Clean up leftovers from previous crash
-- At completion: Ensure this run's data is immediately queryable
+Idempotent: no-op when no PID files exist. Failing to call `clean_ob()` before querying is the most common cause of empty `ob blame` output.
 
-PID file conflicts will silently lose data, must follow this workflow.
+### Query timing
 
-## Query/Revoke
+```
+pipeline runs  →  track() writes docidx.{pid}  →  clean_ob() merges  →  ob blame / ob show available
+```
 
-### ob blame — Query source of a QA
+## Query / Revoke
+
+All commands take `-d output/` to point at OB_DIR.
+
+### `ob blame` — which contributors produced a QA
 
 ```bash
 ob blame -d output/ output/dataset.jsonl 1
 ```
 
-Outputs all section contributors for that QA.
+Lists every section (and its authors) backing line 1 of `dataset.jsonl`.
 
-### ob show — Query all records of an author
+### `ob show` — all records by an author
 
 ```bash
 ob show -d output/ --email "32416701@teasecorpus.invalid"
 ```
 
-Shows all QA records for 铁桶 (default excludes revoked, add `--revoked` to show revoked ones).
+All QA records attributed to 铁桶. Revoked records are excluded by default; add `--revoked` to include them.
 
-### ob revoke — Revoke author (toggle)
+### `ob revoke` — soft-revoke an author (toggle)
 
 ```bash
 ob revoke -d output/ --email "32416701@teasecorpus.invalid"
 ```
 
-Marks 铁桶 author.revoked=True, lazily cascades to all related sections + QA records.
+Marks the author's `revoked=True`; queries lazily filter revoked records. Calling again is a no-op toggle (`--reverse` restores). No data is physically removed.
 
-- **Toggle mode**: Calling again revokes revoke (`--reverse` to restore)
-- **Lazy cascade**: Write side only tags, queries automatically filter
-
-### ob purge — Physical Delete
+### `ob purge` — physical delete
 
 ```bash
-ob purge -d output/ output/dataset.jsonl --dry-run  # Preview
-ob purge -d output/ output/dataset.jsonl            # Execute
+ob purge -d output/ output/dataset.jsonl --dry-run   # preview
+ob purge -d output/ output/dataset.jsonl             # execute
 ```
 
-Physically delete revoked records from JSONL file.
+Removes revoked records from the JSONL file.
 
-**Notes**:
-- Must `ob revoke` before `ob purge`
-- `--dry-run` to preview, prevent accidental deletion
-- Recommend `ob purge` before re-running pipeline to clean old records
+- Must `ob revoke` first.
+- Always preview with `--dry-run`.
+- Recommended before re-running a pipeline, to drop stale records from prior runs.
 
-### ob status — Statistics
+### `ob status` — inventory
 
 ```bash
 ob status -d output/
 ```
 
-Shows:
-- Number of authors
-- Number of sections
-- Number of manifest entries
+Reports author count, section count, and document-index entry count. Sections should read **409** after a clean `setup_ob.py`.
 
 ## Troubleshooting
 
-### "ob provenance: DISABLED (...)"
+### `>> ob provenance: DISABLED (...)`
 
-**Cause**: `setup_ob.py` not run or ob package not importable
+Two usual causes:
 
-**Solution**:
+1. `setup_ob.py` not run yet → `section_map` cache missing (`RuntimeError`).
+2. `ob` not importable (`ImportError`) → re-check the install steps in the README:
+
 ```bash
-python src/setup_ob.py  # Register sections
-python -c "from ob import init, track; from ob.api import _NATIVE; print(f'OK _NATIVE={_NATIVE}')"
+python src/setup_ob.py
+python -c "from ob import init, track; from ob.api import _NATIVE; print(f'ob OK _NATIVE={_NATIVE}')"
 ```
 
-### track fails into .errors.json
+### Track failures in `.errors.json`
 
-**Possible causes**:
-- section_map cache outdated, need to rerun `setup_ob.py`
-- PID file conflict, multiple pipelines running simultaneously
-- ob package not correctly installed (`_NATIVE=False`)
+Inspect the file, then:
 
-**Solution**:
-1. Check `.errors.json` content
-2. Rerun `setup_ob.py` to update section_map
-3. Ensure pipeline runs single-threaded
+- section_map cache stale → re-run `setup_ob.py`;
+- PID file conflict → ensure no two pipelines run concurrently against the same OB_DIR;
+- native module not loaded (`_NATIVE=False`) → re-install originblame.
 
-### `ob status` Authors count > 24
+### `ob blame` / `ob show` returns empty despite tracked records
 
-**Cause**: `author_add` called repeatedly (idempotent, harmless)
+`clean_ob()` hasn't merged the PID files. Re-run any pipeline (which calls `clean_ob()` at start and end) or trigger a clean manually.
 
-**Solution**: Ignore, doesn't affect functionality
+### `ob status` reports more authors than 23
 
-### ob blame / ob show returns empty
-
-**Cause**: `clean_ob()` not called to merge PID files
-
-**Solution**:
-```bash
-ob clean -d output/  # Query available after merge
-```
-
-## HuggingFace Release
-
-Release package contains three core files:
-
-- `dataset.jsonl` — Final dataset, all QAs' line_hashes correspond to .ob/document-index/
-- `README.md` — Dataset card, explaining data sources, usage, license
-- `LICENSE` — License file
-
-Users can download `dataset.jsonl` from HuggingFace Hub and query sources directly with `ob blame -d output/ output/dataset.jsonl N`.
+`author_add` is idempotent and may be invoked across re-runs; harmless. The unique-author count is what matters.
 
 ## What's Not Integrated
 
-The following features are not in teasecorpus integration scope:
-
-### DEP-5 export
-
-`ob export-copyright` can export copyright files, but doesn't enter pipeline workflow.
-
-### Embedding reconcile
-
-Dump is a static snapshot, doesn't need reconcile (only applicable to continuously updated datasets).
-
-### Token-level tracking
-
-QA-level provenance doesn't need tokenizer-level tracking.
-
-### PII Stripping
-
-Current implementation preserves `name` + `email` fields. Production deployment can strip PII per paper §6:
-
-```bash
-# Optional: Remove name/email from .ob/authors/, keep only SHA-256 id
-```
-
-### Source stack
-
-Doesn't use `source.append/pop` pattern (thread-local per-file), instead uses explicit `track(source=[hashes])` to implement precise per-page contributor granularity.
+- **DEP-5 / `ob export-copyright`** — available in ob but not part of the pipeline workflow.
+- **Embedding reconcile** — the dump is a static snapshot; reconcile is only meaningful for continuously updated corpora.
+- **Token-level tracking** — QA-level provenance doesn't require tokenizer granularity.
+- **PII stripping** — `name` + `email` are currently retained verbatim under `output/.ob/authors/`. Production deployments that need to publish `.ob/` alongside the dataset may strip PII and keep only the SHA-256 author id (originblame paper §6).
+- **`source.append` / `source.pop` thread-local stack** — not used; teasecorpus attributes each QA explicitly via `track(source=[hashes])`.
 
 ## References
 
-- [OriginBlame paper](https://arxiv.org/abs/2405.06332)
-- [RFC 6761 — Reserved Top Level DNS Names](https://www.rfc-editor.org/rfc/rfc6761)
-- [RFC 6762 — Multicast DNS](https://www.rfc-editor.org/rfc/rfc6762) (why not use .local)
+- [OriginBlame paper — arXiv:2607.13037](https://arxiv.org/abs/2607.13037)
+- [RFC 6761 — Reserved Top Level DNS Names](https://www.rfc-editor.org/rfc/rfc6761) (`.invalid` TLD)
+- [CC-BY-SA-3.0](https://creativecommons.org/licenses/by-sa/3.0/) (wiki license applied to every section)

@@ -6,53 +6,45 @@ Dataset: [https://huggingface.co/datasets/tzbkk/teasecorpus](https://huggingface
 
 ## Dependencies
 
-This repository depends on two sibling repositories. Clone them to the same parent directory first:
-
-| Repository | Path | Purpose |
-|------------|------|---------|
-| [py-wikieditor](../py-wikieditor) | `../py-wikieditor/` | Fandom wiki API client (`fandom_bot` package) |
-| [rust-originblame](../rust-originblame) | `../rust-originblame/` | Record-level provenance (`ob` Python package + `ob` CLI) |
+| Package | Source | Purpose |
+|---------|--------|---------|
+| [originblame](https://pypi.org/project/originblame/) | PyPI | Record-level provenance (`ob` Python package + `ob` CLI) |
+| [py-wikieditor](../py-wikieditor) | sibling repo (`../py-wikieditor/`) | Fandom wiki API client (`fandom_bot` package) |
 
 ## Quick Start
 
 ```bash
-# 1. Clone sibling repositories to the same parent directory
+# 1. Clone sibling repository to the same parent directory
 git clone https://github.com/tzbkk/py-wikieditor ../py-wikieditor
-git clone https://github.com/tzbkk/rust-originblame ../rust-originblame
 
-# 2. Create venv (requires Python 3.13 to reuse rust-originblame's precompiled PyO3 .so)
+# 2. Create venv (Python 3.12+)
 uv venv --python 3.13 --seed .venv
 source .venv/bin/activate
 
-# 3. Install dependencies (use aliyun mirror for users in China)
-pip install -i https://mirrors.aliyun.com/pypi/simple/ \
-    -e ../py-wikieditor openai python-dotenv
+# 3. Install dependencies
+pip install originblame openai python-dotenv
+pip install -e ../py-wikieditor
 
-# 4. Make the ob package importable (precompiled .so files are in rust-originblame/python/src/)
-SITE_PKG=$(.venv/bin/python -c "import site; print(site.getsitepackages()[0])")
-OB_SRC=$(.venv/bin/python -c "from pathlib import Path; print(Path('../rust-originblame/python/src').resolve())")
-echo "$OB_SRC" > "$SITE_PKG/_ob_native.pth"
-
-# 5. Verify
+# 4. Verify
 python -c "from ob import init, track; from ob.api import _NATIVE; print(f'ob OK _NATIVE={_NATIVE}')"
 python -c "import fandom_bot, openai, dotenv; print('deps OK')"
 
-# 6. Configure
+# 5. Configure
 cp .env.example .env   # Edit and add Fandom + LLM credentials
 
-# 7. Register ob sections (one-time setup)
+# 6. Register ob sections (one-time setup)
 python src/setup_ob.py
 
-# 8. Download dump
+# 7. Download dump
 python src/pipeline_preproc/download_dump.py
 
- # 9. Generate QA
+# 8. Generate QA
 python src/pipeline_qa_gen/chapter_qa.py --max-chapters 5 --reset    # Small batch test
 python src/pipeline_qa_gen/chapter_qa.py                     # Full run
 # ... Other 6 types
 # Output to output/.cache/{type}.jsonl (intermediate artifacts, gitignored)
 
-# 10. Merge
+# 9. Merge
 python src/merge_outputs.py
 # Output to output/dataset.jsonl (final product, same level as output/.ob, gitignored because it can be regenerated)
 ```
