@@ -1,30 +1,30 @@
 #!/usr/bin/env python3
-"""download_dump.py — 从 Fandom Wiki 下载完整 MediaWiki XML dump。
+"""download_dump.py — Download complete MediaWiki XML dump from Fandom Wiki.
 
-基于 ../py-wikieditor/src/dump_xml.py 的 export_via_special 核心逻辑，
-输出到本项目的 wikidump/ 目录，使用与下游 pipeline 一致的命名约定。
+Based on ../py-wikieditor/src/dump_xml.py export_via_special core logic.
+Outputs to wikidump/ directory.
 
-依赖:
+Dependencies:
   pip install -e ../py-wikieditor
 
-用法:
-  python src/pipeline_preprocess/download_dump.py              # 下载所有默认命名空间
-  python src/pipeline_preprocess/download_dump.py --ns 0       # 只下载 main ns
-  python src/pipeline_preprocess/download_dump.py --force      # 强制重新下载
-  python src/pipeline_preprocess/download_dump.py --list-only  # 只列出页面，不下载
+Usage:
+  python src/pipeline_preproc/download_dump.py              # Download all default namespaces
+  python src/pipeline_preproc/download_dump.py --ns 0       # Download main ns only
+  python src/pipeline_preproc/download_dump.py --force      # Force re-download
+  python src/pipeline_preproc/download_dump.py --list-only  # List pages only, no download
 
-产物:
-  wikidump/ns0.xml                          # main namespace (0)
+Outputs:
+  wikidump/ns0.xml                          # Main namespace (0)
   wikidump/Template.xml                     # Template (10)
   wikidump/Category.xml                     # Category (14)
   wikidump/Module.xml                       # Module (828)
-  wikidump/<project_name>.xml               # Project (4), 如 "擅长捉弄的高木同学wiki.xml"
-  wikidump/*.progress.json                  # 断点续传状态
+  wikidump/<project_name>.xml               # Project (4), e.g. "擅长捉弄的高木同学wiki.xml"
+  wikidump/*.progress.json                  # Resumable progress state
 
-注意:
-  - 走 prop=revisions API (special mode), 包含完整 revision history
-  - 每页拉完立即 fsync 到磁盘, 重跑自动从断点续
-  - Fandom 速率限制: 请求间隔默认 1s
+Notes:
+  - Uses prop=revisions API (special mode), includes complete revision history
+  - Each page is fsync'd to disk immediately; re-runs auto-resume from checkpoint
+  - Fandom rate limit: default 1s between requests
 """
 
 import argparse
@@ -37,17 +37,16 @@ from src.dump_xml import _api_url, _resolve_ns_name, export_via_special
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 DUMP_DIR = REPO_ROOT / 'wikidump'
 DEFAULT_NS = {
-    0: 'ns0',       # 我们 pipeline 约定 main ns 命名为 ns0.xml
-    4: None,         # 动态解析 project ns 的 wiki 名称
+    0: 'ns0',       # Pipeline convention: main ns named ns0.xml
+    4: None,         # Dynamically resolve project ns wiki name
 }
 
 
 def _map_filename(ns_id: int, site) -> str:
-    """将命名空间 ID 映射为输出文件名(不含扩展名)。"""
+    """Map namespace ID to output filename stem."""
     custom = DEFAULT_NS.get(ns_id)
     if custom is not None:
         return custom
-    # 默认回退到 MediaWiki 命名空间名称
     return _resolve_ns_name(site, ns_id)
 
 

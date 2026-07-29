@@ -1,27 +1,27 @@
 #!/usr/bin/env python3
-"""update_dump.py — 增量更新 Fandom Wiki XML dump。
+"""update_dump.py — Incrementally update Fandom Wiki XML dump.
 
-基于 ../py-wikieditor/src/dump_xml.py 的 export_incremental_via_special 核心逻辑，
-下载自上次全量 dump 以来的增量修订，产出独立 delta XML 文件。
+Based on ../py-wikieditor/src/dump_xml.py export_incremental_via_special core logic.
+Downloads incremental revisions since the last full dump, outputs independent delta XML.
 
-依赖:
+Dependencies:
   pip install -e ../py-wikieditor
 
-用法:
-  python src/pipeline_preprocess/update_dump.py                 # 所有默认命名空间
-  python src/pipeline_preprocess/update_dump.py --ns 0          # 只更新 main ns
-  python src/pipeline_preprocess/update_dump.py --dry-run       # 预览变更(不下载)
+Usage:
+  python src/pipeline_preproc/update_dump.py                 # All default namespaces
+  python src/pipeline_preproc/update_dump.py --ns 0          # Update main ns only
+  python src/pipeline_preproc/update_dump.py --dry-run       # Preview changes (no download)
 
-产物:
-  wikidump/ns0.delta.<YYYYMMDD-HHMMSS>.xml   # 增量 XML(delta,独立文件)
-  wikidump/ns0.deleted.<YYYYMMDD-HHMMSS>.txt  # 删除/移动清单(仅有事件时)
-  wikidump/ns0.xml.progress.json              # 更新 last_incremental_* 字段
+Outputs:
+  wikidump/ns0.delta.<YYYYMMDD-HHMMSS>.xml   # Incremental XML (delta, standalone file)
+  wikidump/ns0.deleted.<YYYYMMDD-HHMMSS>.txt  # Deletion/move list (when events occur)
+  wikidump/ns0.xml.progress.json              # Updated last_incremental_* fields
 
-注意:
-  - 基于 list=recentchanges API + revision ID 高水位
-  - 默认 30 天窗口; 超过 25 天会 warning
-  - 不修改原 ns0.xml 等全量文件
-  - 合并增量到全量: 手动执行或重跑 download_dump.py --force
+Notes:
+  - Based on list=recentchanges API + revision ID high-watermark
+  - Default 30-day window; warns if over 25 days
+  - Does not modify original ns0.xml full dump
+  - Merge delta to full: manual or re-run download_dump.py --force
 """
 
 import argparse
