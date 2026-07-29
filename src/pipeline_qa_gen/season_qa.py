@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # src/
 
 from wiki_parser import load_dump, collect_seasons
 from llm_client import run_pipeline, anti_tautology_block
-from provenance import load_section_map, make_source_extractor, track_chatml, clean_ob
+from provenance import make_source_extractor, setup_provenance, teardown_provenance
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -119,16 +119,7 @@ def main():
     items = collect_seasons(contents, contributors_by_page=contribs_with_years)
     print(f'   seasons={len(items)}', flush=True)
 
-    try:
-        section_map = load_section_map()
-        source_extractor = make_source_extractor(section_map)
-        track_fn = track_chatml
-        clean_ob()
-        print('>> ob provenance: ENABLED', flush=True)
-    except (RuntimeError, ImportError) as e:
-        source_extractor = None
-        track_fn = None
-        print(f'>> ob provenance: DISABLED ({e})', flush=True)
+    source_extractor, track_fn = setup_provenance(make_source_extractor)
 
     run_pipeline(
         items=items,
@@ -144,12 +135,7 @@ def main():
         track_fn=track_fn,
     )
 
-    if track_fn is not None:
-        try:
-            merged = clean_ob()
-            print(f'>> ob clean: merged {merged} records', flush=True)
-        except Exception as e:
-            print(f'>> warning: ob clean failed: {e}', flush=True)
+    teardown_provenance(track_fn)
 
 
 if __name__ == '__main__':

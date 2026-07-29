@@ -48,7 +48,7 @@ def clean_ob() -> int:
     Call at pipeline start (absorb crashed leftovers) and end (queries work
     immediately). No-op when no PID files exist.
     """
-    from _ob_native import clean as _native_clean
+    from ob._ob_native import clean as _native_clean
     result = _native_clean(str(OB_DIR), False)
     return result.get('document_merged', 0) if isinstance(result, dict) else 0
 
@@ -185,3 +185,38 @@ def track_chatml(chatml: dict, file_path: Path, section_hashes: list[str]) -> No
     """
     from ob import track
     track(chatml, file=DATASET_PATH, source=section_hashes, ob_dir=OB_DIR)
+
+
+# ---------------------------------------------------------------------------
+# Pipeline helpers (used by all 7 pipeline_qa_gen/*.py scripts)
+# ---------------------------------------------------------------------------
+
+def setup_provenance(source_extractor_factory):
+    """Initialize provenance tracking for a pipeline run.
+
+    Returns (source_extractor, track_fn) or (None, None) if disabled.
+    Cleans leftover PID files from prior crashes.
+
+    Args:
+        source_extractor_factory: callable(section_map) -> source_extractor function.
+    """
+    try:
+        section_map = load_section_map()
+        clean_ob()
+        source_extractor = source_extractor_factory(section_map)
+        print('>> ob provenance: ENABLED', flush=True)
+        return source_extractor, track_chatml
+    except (RuntimeError, ImportError) as e:
+        print(f'>> ob provenance: DISABLED ({type(e).__name__}: {e})', flush=True)
+        return None, None
+
+
+def teardown_provenance(track_fn) -> None:
+    """Merge PID files after pipeline completion."""
+    if track_fn is None:
+        return
+    try:
+        merged = clean_ob()
+        print(f'>> ob clean: merged {merged} records', flush=True)
+    except Exception as e:
+        print(f'>> warning: ob clean failed: {e}', flush=True)

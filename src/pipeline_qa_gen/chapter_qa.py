@@ -16,10 +16,7 @@ from wiki_parser import (
     load_cherry_pick_page, strip_markup,
 )
 from llm_client import run_pipeline, anti_tautology_block
-from provenance import (
-    load_section_map, track_chatml, clean_ob,
-    make_chapter_source_extractor,
-)
+from provenance import make_chapter_source_extractor, setup_provenance, teardown_provenance
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -305,18 +302,8 @@ def main():
             )
         return prompt
 
-    source_extractor = None
-    track_fn = None
-    try:
-        section_map = load_section_map()
-        clean_ob()
-        source_extractor = make_chapter_source_extractor(section_map, translation_table)
-        track_fn = track_chatml
-        print('>> ob provenance: ENABLED (chapter + 译名表)', flush=True)
-    except (RuntimeError, ImportError) as e:
-        source_extractor = None
-        track_fn = None
-        print(f'>> ob provenance: DISABLED ({type(e).__name__}: {e})', flush=True)
+    source_extractor, track_fn = setup_provenance(
+        lambda sm: make_chapter_source_extractor(sm, translation_table))
 
     run_pipeline(
         items=chapter_pages,
@@ -332,12 +319,7 @@ def main():
         track_fn=track_fn,
     )
 
-    if track_fn is not None:
-        try:
-            merged = clean_ob()
-            print(f'>> ob clean: merged {merged} records', flush=True)
-        except Exception as e:
-            print(f'>> warning: ob clean failed: {e}', flush=True)
+    teardown_provenance(track_fn)
 
 
 if __name__ == '__main__':

@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # src/
 
 from wiki_parser import load_dump, collect_volumes
 from llm_client import to_chatml, strip_incomplete_jsonl, load_progress, save_progress
-from provenance import load_section_map, make_source_extractor, track_chatml, clean_ob
+from provenance import make_source_extractor, track_chatml, setup_provenance, teardown_provenance
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -84,16 +84,7 @@ def main():
         items = items[:args.max]
     print(f'   volumes={len(items)}', flush=True)
 
-    try:
-        section_map = load_section_map()
-        source_extractor = make_source_extractor(section_map)
-        track_fn = track_chatml
-        clean_ob()
-        print('>> ob provenance: ENABLED', flush=True)
-    except (RuntimeError, ImportError) as e:
-        source_extractor = None
-        track_fn = None
-        print(f'>> ob provenance: DISABLED ({e})', flush=True)
+    source_extractor, track_fn = setup_provenance(make_source_extractor)
 
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     data_path = CACHE_DIR / 'volume.jsonl'
@@ -132,12 +123,7 @@ def main():
 
     print(f'\n>> done: {done_qa} QA in {data_path}', flush=True)
 
-    if track_fn is not None:
-        try:
-            merged = clean_ob()
-            print(f'>> ob clean: merged {merged} records', flush=True)
-        except Exception as e:
-            print(f'>> warning: ob clean failed: {e}', flush=True)
+    teardown_provenance(track_fn)
 
 
 if __name__ == '__main__':

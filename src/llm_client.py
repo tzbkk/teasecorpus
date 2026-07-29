@@ -188,15 +188,10 @@ def run_pipeline(items, build_prompt, build_template_qa, decontextualize,
         build_template_qa(item) -> list[(q, a)]: fallback for no-LLM or sparse pages.
         decontextualize(text, item) -> str: post-process LLM output.
         system: system prompt.
-        source_label: meta.source value (e.g. 'wikidump/ns0.xml').
         output_subdir: file stem under output/.cache/ (e.g. 'chapter' -> chapter.jsonl).
         delay: seconds between LLM calls.
         max_items: 0 = all.
         item_id_fn(item) -> str: human-readable id for logs/meta.
-        meta_type: meta.type value stamped on every chatml row at production
-            time (e.g. 'chapter'). Must match the cache file stem and the
-            TYPES list in merge_outputs.py so line_hash stays stable from
-            pipeline -> final dataset.jsonl.
         source_extractor: optional callable
             `(item, qa_pair=None) -> list[str] | None` returning a list of
             section hashes the resulting ChatML row was derived from. Called
